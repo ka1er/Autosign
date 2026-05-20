@@ -1,9 +1,9 @@
 ﻿// ==UserScript==
-// @name         中国移动自动签署脚本
+// @name         中国移动自动签署脚本 (更新版)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  自动签署中国移动文件 - 初始归档版本 1.0
-// @author       Zhangchenghe
+// @version      1.0.1
+// @description  自动签署中国移动文件 - 修复元素选择器
+// @author       Zhangchenghe (Updated by AI)
 // @match        *://*.chinamobile.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -325,7 +325,7 @@
     async function checkAllBoxesIn(container) {
         try {
             const scope = container || document;
-            // 优先尝试表头“全选”（弹窗内表格）
+            // 优先尝试表头"全选"（弹窗内表格）
             const headerCheck = scope.querySelector('.el-dialog__body th.el-table-column--selection .el-checkbox__input, .el-dialog__body th.el-table-column--selection .el-checkbox, .el-dialog__body .el-table__header-wrapper th .el-checkbox, .el-dialog__body .el-table__header-wrapper .el-checkbox');
             if (headerCheck) {
                 const headerLabel = headerCheck.classList.contains('el-checkbox__input') ? (headerCheck.closest('.el-checkbox') || headerCheck) : headerCheck;
@@ -425,7 +425,7 @@
         }
     }
 
-    // 查找电子签章按钮的函数
+    // 查找电子签章按钮的函数 - 移除 data-v 属性依赖
     async function findSignButton() {
         console.log('开始查找电子签章按钮...');
         
@@ -440,10 +440,10 @@
             return signButton;
         }
 
-        // 方法2：通过完整的类名和属性查找
-        const signButton2 = document.querySelector('button.el-button.el-button--primary.is-plain[data-v-ad131836]');
+        // 方法2：通过类名查找（移除 data-v 属性）
+        const signButton2 = document.querySelector('button.el-button.el-button--primary.is-plain');
         if (signButton2) {
-            console.log('通过类名和属性找到电子签章按钮');
+            console.log('通过类名找到电子签章按钮');
             return signButton2;
         }
 
@@ -518,7 +518,7 @@
                 await waitForElement('i.icon.font_family.icon-piliangchuli', 15000, true);
             }
             
-            // 4. 点击“批量签章”并在弹窗内操作
+            // 4. 点击"批量签章"并在弹窗内操作
             console.log('第三步：等待批量签章按钮出现...');
             const batchSignLink = await waitForElement('i.icon.font_family.icon-piliangchuli', 15000, true);
             if (!batchSignLink) {
@@ -530,7 +530,7 @@
             const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
             await performReliableClick(linkElement || batchSignLink);
 
-            // 等待“批量签章”对话框（回退一开始的方式：直接等复选框并全选）
+            // 等待"批量签章"对话框（回退一开始的方式：直接等复选框并全选）
             await new Promise(resolve => setTimeout(resolve, 1000));
             console.log('第四步：优先尝试表头全选');
             const headerSelected2 = await selectAllCurrentPageInDialog();
@@ -546,9 +546,9 @@
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
 
-            // 点击确定按钮（原始逻辑）
+            // 点击确定按钮 - 移除 data-v 属性依赖
             console.log('第五步：等待确定按钮出现...');
-            const confirmButton_v1 = await waitForElement('button.el-button--primary[data-v-4550e3f9]', 10000, true);
+            const confirmButton_v1 = await waitForElement('button.el-button--primary', 10000, true);
             if (!confirmButton_v1) {
                 console.log('未找到确定按钮');
                 return false;
@@ -595,8 +595,8 @@
             // 选中所有复选框
             await checkAllBoxes();
             
-            // 查找并点击确定按钮
-            const confirmButton = await waitForElement('button.el-button--primary[data-v-4550e3f9]', 5000, true);
+            // 查找并点击确定按钮 - 移除 data-v 属性依赖
+            const confirmButton = await waitForElement('button.el-button--primary', 5000, true);
             if (confirmButton) {
                 console.log('点击确定按钮，开始新一轮签名');
                 confirmButton.click();
@@ -648,7 +648,7 @@
                 if (!checkboxes.length) {
                     console.log('没有可选择的文件，关闭对话框');
                     // 查找并点击取消按钮
-                    const cancelButton = await waitForElement('button.el-button--default[data-v-4550e3f9]', 5000, true);
+                    const cancelButton = await waitForElement('button.el-button--default', 5000, true);
                     if (cancelButton) {
                         cancelButton.click();
                     }
@@ -663,8 +663,8 @@
                     continue; // 失败后继续下一次循环
                 }
 
-                // 查找并点击确定按钮
-                const confirmButton = await waitForElement('button.el-button--primary[data-v-4550e3f9]', 10000, true);
+                // 查找并点击确定按钮 - 移除 data-v 属性依赖
+                const confirmButton = await waitForElement('button.el-button--primary', 10000, true);
                 if (!confirmButton) {
                     console.log('未找到确定按钮');
                     continue; // 失败后继续下一次循环
@@ -819,7 +819,8 @@
                 // 以画布为准：如果画布出现但签名模块不存在/不可见，则跳过；否则执行签名
                 const canvas = await waitForElement('canvas.canvasstyle', 3000, true);
                 if (canvas) {
-                    const sig = document.querySelector('div.carousel-i-New[data-v-ff604b60]');
+                    // 移除 data-v 属性依赖
+                    const sig = document.querySelector('div.carousel-i-New');
                     if (!sig || !isElementVisible(sig)) {
                         console.log('检测流程：画布存在但无签名模块，跳过');
                         continue;
@@ -884,7 +885,7 @@
         } catch (e) {}
     }
 
-    // 主要签署流程
+    // 主要签署流程 - 移除 data-v 属性依赖
     async function signProcess() {
         try {
             console.log('开始签署流程...');
@@ -897,7 +898,9 @@
                 return false;
             }
             await new Promise(r => setTimeout(r, 500));
-            let signatureModuleNow = document.querySelector('div.carousel-i-New[data-v-ff604b60]');
+            
+            // 移除 data-v 属性依赖
+            let signatureModuleNow = document.querySelector('div.carousel-i-New');
             if (!signatureModuleNow || !isElementVisible(signatureModuleNow)) {
                 console.log('画布存在，但签名模块未出现，判定为已签状态，跳过当前文件');
                 return true;
@@ -909,6 +912,7 @@
 
             // 点击确认签署（签章成功的唯一依据：确认签署后出现确认弹窗）
             console.log('查找确认签署按钮...');
+            // 移除 data-v 属性依赖
             const confirmButton = await waitForElement('button.el-button--primary', 10000, true);
             if (confirmButton) {
                 console.log('找到确认签署按钮，点击中...');
@@ -1102,7 +1106,7 @@
         location.reload();
     }
 
-    // 批量签章页面的处理流程
+    // 批量签章页面的处理流程 - 移除 data-v 属性依赖
     async function handleBatchSignaturePage() {
         try {
             // 仅重试一次：打开对话框 → 勾选 → 校验 → 确定（最多 2 次，否则提醒人工介入）
@@ -1151,6 +1155,7 @@
 
                 // 校验本页全选
                 const bodyCheckboxes = dialog.querySelectorAll('.el-table__body-wrapper .el-checkbox__input');
+
                 const allCheckboxesChecked = Array.from(bodyCheckboxes).length > 0 && Array.from(bodyCheckboxes).every(cb => cb.classList.contains('is-checked'));
                 if (!allCheckboxesChecked) {
                     console.log('还有复选框未选中，准备重试弹窗');
@@ -1161,7 +1166,7 @@
                     continue;
                 }
 
-                // 确定
+                // 确定 - 移除 data-v 属性依赖
                 console.log('在对话框底部查找确定按钮...');
                 const confirmButton = dialog.querySelector('.el-dialog__footer .dialog-footer button.el-button--primary');
                 if (!confirmButton || /is-disabled/.test(confirmButton.className || '')) {
@@ -1252,4 +1257,4 @@
             console.error('页面可见性变化处理出错:', error);
         }
     }
-})(); 
+})();
