@@ -2,6 +2,12 @@
 
 All notable changes to this private repository are tracked here.
 
+## v1.1.0
+
+- Originally marked as `0.4`.
+- Reworked the flow around status-element based selection.
+- Reduced the script size and simplified the signing automation path.
+
 ## v1.0.1
 
 - Originally marked as `0.3`.
@@ -15,4 +21,5 @@ All notable changes to this private repository are tracked here.
 - Added run/stop control button.
 - Added persisted running state.
 - Added automatic signing flow and basic retry handling.
+
 
