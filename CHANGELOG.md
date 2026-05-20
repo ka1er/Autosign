@@ -2,6 +2,14 @@
 
 All notable changes to this private repository are tracked here.
 
+## v1.1.1
+
+- Final retained version.
+- Added real-time status bar updates.
+- Improved signing flow and page-state feedback.
+- Improved waiting strategy for canvas and signature modules.
+- Improved handling of run/stop state during long signing flows.
+
 ## v1.1.0
 
 - Originally marked as `0.4`.
@@ -21,5 +29,6 @@ All notable changes to this private repository are tracked here.
 - Added run/stop control button.
 - Added persisted running state.
 - Added automatic signing flow and basic retry handling.
+
 
 
