@@ -1,0 +1,22 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Local-only data
+local/
+private/
+test-data/
+
+# Archives and media kept outside source repo
+*.zip
+*.rar
+*.7z
+*.mov
+*.mp4
