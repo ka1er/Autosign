@@ -1,9 +1,9 @@
 ﻿// ==UserScript==
-// @name         中国移动自动签署脚本
+// @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.3
-// @description  自动签署中国移动文件 - 支持签字位置设置和优化的签名流程
-// @author       Zhangchenghe
+// @version      1.1.4
+// @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
+// @author       kaler
 // @match        *://*.chinamobile.com/*todoList*
 // @match        *://*.chinamobile.com/*librarySignature*
 // @match        *://*.chinamobile.com/*pageseal/signature*
