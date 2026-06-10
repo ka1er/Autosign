@@ -1,12 +1,10 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.4
+// @version      1.1.5
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
-// @match        *://*.chinamobile.com/*todoList*
-// @match        *://*.chinamobile.com/*librarySignature*
-// @match        *://*.chinamobile.com/*pageseal/signature*
+// @match        *://*.chinamobile.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
@@ -1375,6 +1373,32 @@
         return 'unknown';
     }
 
+    function isSupportedAutoSignPage() {
+        return getPageType() !== 'unknown';
+    }
+
+    function removeControlUi() {
+        const button = document.querySelector('button[data-auto-sign-control]');
+        const settingsButton = document.querySelector('button[data-auto-sign-settings]');
+        const settingsPanel = document.querySelector('div[data-auto-sign-settings-panel]');
+        const badge = document.querySelector('span[data-auto-sign-status]');
+        if (button) button.remove();
+        if (settingsButton) settingsButton.remove();
+        if (settingsPanel) settingsPanel.remove();
+        if (badge) badge.remove();
+        statusBadge = null;
+    }
+
+    function syncControlVisibility() {
+        if (isSupportedAutoSignPage()) {
+            createControlButton();
+            return;
+        }
+        if (!isRunning && !processStarted) {
+            removeControlUi();
+        }
+    }
+
     // 全局变量
     let isRunning = false;
     let processStarted = false;
@@ -1615,8 +1639,17 @@
         console.log('页面加载完成');
         console.log('当前URL:', window.location.href);
         
-        // 创建控制按钮
-        const controlButton = createControlButton();
+        // 仅在支持的页面显示控制按钮；脚本保持宽匹配以兼容前端路由。
+        syncControlVisibility();
+
+        let lastKnownUrl = window.location.href;
+        setInterval(() => {
+            const currentUrl = window.location.href;
+            if (currentUrl !== lastKnownUrl) {
+                lastKnownUrl = currentUrl;
+                syncControlVisibility();
+            }
+        }, 500);
         
         // 添加可见性变化监听（统一走首次入口逻辑）
         document.addEventListener('visibilitychange', () => {
