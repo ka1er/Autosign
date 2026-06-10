@@ -1,45 +1,42 @@
-﻿# Changelog
+# 版本记录
 
-All notable changes to this private repository are tracked here.
+本文件记录该私有仓库中脚本版本的主要变化。
 
 ## v1.1.3
 
-- Limited script injection to the pages where the automation flow is active.
+- 限制脚本只在自动化流程实际生效的页面中加载。
+- 适用页面包括待办列表页、批量签章页和单个签名页。
 
 ## v1.1.2
 
-- Added configurable signing position options.
-- Added a settings button and signing position selector.
-- Improved processing-button detection after list refreshes.
-- Improved status feedback during signing runs.
+- 新增可配置的签字位置选项。
+- 新增设置按钮和签字位置选择器。
+- 优化列表刷新后的“处理”按钮识别逻辑。
+- 优化签署运行过程中的状态提示。
 
 ## v1.1.1
 
-- Final retained version.
-- Added real-time status bar updates.
-- Improved signing flow and page-state feedback.
-- Improved waiting strategy for canvas and signature modules.
-- Improved handling of run/stop state during long signing flows.
+- 新增实时状态栏更新。
+- 优化签名流程和页面状态反馈。
+- 优化画布和签名模块的等待策略。
+- 优化长流程运行/停止状态处理。
 
 ## v1.1.0
 
-- Originally marked as `0.4`.
-- Reworked the flow around status-element based selection.
-- Reduced the script size and simplified the signing automation path.
+- 原始版本号为 `0.4`。
+- 基于状态元素选择重构处理流程。
+- 减少脚本体积，并简化自动签署路径。
 
 ## v1.0.1
 
-- Originally marked as `0.3`.
-- Fixed element selector handling.
-- Kept the same main script filename, `autoSign.js`, for maintainability.
+- 原始版本号为 `0.3`。
+- 修复元素选择器处理逻辑。
+- 继续使用统一主脚本文件名 `autoSign.js`，便于维护。
 
 ## v1.0
 
-- Initial archived version, originally marked as `0.2`.
-- Added Tampermonkey metadata.
-- Added run/stop control button.
-- Added persisted running state.
-- Added automatic signing flow and basic retry handling.
-
-
-
+- 初始归档版本，原始版本号为 `0.2`。
+- 新增 Tampermonkey 元数据。
+- 新增运行/停止控制按钮。
+- 新增运行状态持久化。
+- 新增自动签署流程和基础重试处理。
