@@ -4,7 +4,9 @@
 // @version      1.1.3
 // @description  自动签署中国移动文件 - 支持签字位置设置和优化的签名流程
 // @author       Zhangchenghe
-// @match        *://*.chinamobile.com/*
+// @match        *://*.chinamobile.com/*todoList*
+// @match        *://*.chinamobile.com/*librarySignature*
+// @match        *://*.chinamobile.com/*pageseal/signature*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener

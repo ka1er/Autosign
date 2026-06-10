@@ -2,6 +2,10 @@
 
 All notable changes to this private repository are tracked here.
 
+## v1.1.3
+
+- Limited script injection to the pages where the automation flow is active.
+
 ## v1.1.2
 
 - Added configurable signing position options.
