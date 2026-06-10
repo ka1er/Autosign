@@ -2,6 +2,13 @@
 
 All notable changes to this private repository are tracked here.
 
+## v1.1.2
+
+- Added configurable signing position options.
+- Added a settings button and signing position selector.
+- Improved processing-button detection after list refreshes.
+- Improved status feedback during signing runs.
+
 ## v1.1.1
 
 - Final retained version.

@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
 // @name         中国移动自动签署脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
-// @description  自动签署中国移动文件 - 支持实时状态栏更新和优化的签名流程
+// @version      1.1.2
+// @description  自动签署中国移动文件 - 支持签字位置设置和优化的签名流程
 // @author       Zhangchenghe
 // @match        *://*.chinamobile.com/*
 // @grant        GM_setValue
@@ -12,6 +12,16 @@
 
 (function() {
     'use strict';
+
+    const SIGN_POSITION_KEY = 'autoSignPosition';
+    const SIGN_POSITION_OPTIONS = [
+        { value: 'top-left', label: '左上' },
+        { value: 'bottom-left', label: '左下' },
+        { value: 'bottom-right', label: '右下' },
+        { value: 'top-right', label: '右上' },
+        { value: 'center', label: '中间' },
+        { value: 'random', label: '随机位置' }
+    ];
 
     // 创建控制按钮
     let statusBadge = null;
@@ -62,12 +72,13 @@
         };
         
         document.body.appendChild(button);
+        createSettingsButton();
         if (!statusBadge) {
             statusBadge = document.createElement('span');
             statusBadge.setAttribute('data-auto-sign-status', 'true');
             statusBadge.style.position = 'fixed';
             statusBadge.style.top = '10px';
-            statusBadge.style.left = '110px';
+            statusBadge.style.left = '150px';
             statusBadge.style.zIndex = '9999';
             statusBadge.style.padding = '6px 10px';
             statusBadge.style.backgroundColor = '#303133';
@@ -81,6 +92,145 @@
         return button;
     }
 
+    function getSignPositionMode() {
+        let mode = localStorage.getItem(SIGN_POSITION_KEY);
+        try {
+            mode = (GM_getValue && GM_getValue(SIGN_POSITION_KEY)) || mode;
+        } catch (e) {}
+        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+            mode = 'top-right';
+        }
+        return mode;
+    }
+
+    function getSignPositionLabel(mode) {
+        const option = SIGN_POSITION_OPTIONS.find(item => item.value === mode);
+        return option ? option.label : '右上';
+    }
+
+    function setSignPositionMode(mode) {
+        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+            return;
+        }
+        try { GM_setValue && GM_setValue(SIGN_POSITION_KEY, mode); } catch (e) {}
+        localStorage.setItem(SIGN_POSITION_KEY, mode);
+    }
+
+    function createSettingsButton() {
+        if (document.querySelector('button[data-auto-sign-settings]')) {
+            return;
+        }
+
+        const settingsButton = document.createElement('button');
+        settingsButton.setAttribute('data-auto-sign-settings', 'true');
+        settingsButton.innerHTML = '设置';
+        settingsButton.style.position = 'fixed';
+        settingsButton.style.top = '10px';
+        settingsButton.style.left = '100px';
+        settingsButton.style.zIndex = '9999';
+        settingsButton.style.padding = '8px 12px';
+        settingsButton.style.cursor = 'pointer';
+        settingsButton.style.backgroundColor = '#67C23A';
+        settingsButton.style.color = 'white';
+        settingsButton.style.border = 'none';
+        settingsButton.style.borderRadius = '4px';
+        settingsButton.style.fontSize = '14px';
+        settingsButton.style.fontWeight = 'bold';
+
+        settingsButton.onmouseover = function() {
+            if (localStorage.getItem('autoSignRunning') !== 'true') {
+                this.style.backgroundColor = '#85ce61';
+            }
+        };
+        settingsButton.onmouseout = function() {
+            this.style.backgroundColor = localStorage.getItem('autoSignRunning') === 'true' ? '#A0CFFF' : '#67C23A';
+        };
+        settingsButton.onclick = function() {
+            if (localStorage.getItem('autoSignRunning') === 'true') {
+                setStatus('运行中：停止后才能修改签字位置');
+                return;
+            }
+            toggleSettingsPanel();
+        };
+
+        document.body.appendChild(settingsButton);
+        updateSettingsButtonState(localStorage.getItem('autoSignRunning') === 'true');
+    }
+
+    function toggleSettingsPanel() {
+        let panel = document.querySelector('div[data-auto-sign-settings-panel]');
+        if (panel) {
+            panel.remove();
+            return;
+        }
+
+        panel = document.createElement('div');
+        panel.setAttribute('data-auto-sign-settings-panel', 'true');
+        panel.style.position = 'fixed';
+        panel.style.top = '50px';
+        panel.style.left = '10px';
+        panel.style.zIndex = '9999';
+        panel.style.padding = '10px';
+        panel.style.backgroundColor = '#fff';
+        panel.style.border = '1px solid #dcdfe6';
+        panel.style.borderRadius = '4px';
+        panel.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+        panel.style.fontSize = '13px';
+        panel.style.color = '#303133';
+
+        const label = document.createElement('div');
+        label.innerText = '签字位置';
+        label.style.marginBottom = '6px';
+        label.style.fontWeight = 'bold';
+
+        const select = document.createElement('select');
+        select.setAttribute('data-auto-sign-position-select', 'true');
+        select.style.width = '120px';
+        select.style.padding = '4px 6px';
+        select.style.border = '1px solid #dcdfe6';
+        select.style.borderRadius = '4px';
+        select.style.backgroundColor = '#fff';
+        select.disabled = localStorage.getItem('autoSignRunning') === 'true';
+
+        const currentMode = getSignPositionMode();
+        SIGN_POSITION_OPTIONS.forEach(option => {
+            const item = document.createElement('option');
+            item.value = option.value;
+            item.innerText = option.label;
+            item.selected = option.value === currentMode;
+            select.appendChild(item);
+        });
+        select.onchange = function() {
+            if (localStorage.getItem('autoSignRunning') === 'true') {
+                this.value = getSignPositionMode();
+                setStatus('运行中：停止后才能修改签字位置');
+                return;
+            }
+            setSignPositionMode(this.value);
+            setStatus(`已选择签字位置：${getSignPositionLabel(this.value)}`);
+        };
+
+        panel.appendChild(label);
+        panel.appendChild(select);
+        document.body.appendChild(panel);
+    }
+
+    function updateSettingsButtonState(running) {
+        const settingsButton = document.querySelector('button[data-auto-sign-settings]');
+        if (settingsButton) {
+            settingsButton.style.cursor = running ? 'not-allowed' : 'pointer';
+            settingsButton.style.backgroundColor = running ? '#A0CFFF' : '#67C23A';
+        }
+        const panel = document.querySelector('div[data-auto-sign-settings-panel]');
+        const select = document.querySelector('select[data-auto-sign-position-select]');
+        if (select) {
+            select.disabled = running === true;
+        }
+        if (running && panel) {
+            panel.remove();
+        }
+    }
+
     function setStatus(text) {
         try {
             const badge = document.querySelector('span[data-auto-sign-status]') || statusBadge;
@@ -88,9 +238,30 @@
         } catch (e) {}
     }
 
-    // 计算签名位置（右上角）
+    // 计算签名位置
     function calculateSignPosition(canvas) {
         const rect = canvas.getBoundingClientRect();
+        const mode = getSignPositionMode();
+        const marginX = rect.width * 0.1;
+        const marginY = rect.height * 0.1;
+        if (mode === 'top-left') {
+            return { x: rect.left + marginX, y: rect.top + marginY };
+        }
+        if (mode === 'bottom-left') {
+            return { x: rect.left + marginX, y: rect.bottom - marginY };
+        }
+        if (mode === 'bottom-right') {
+            return { x: rect.right - marginX, y: rect.bottom - marginY };
+        }
+        if (mode === 'center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.5) };
+        }
+        if (mode === 'random') {
+            return {
+                x: rect.left + marginX + (Math.random() * (rect.width - marginX * 2)),
+                y: rect.top + marginY + (Math.random() * (rect.height - marginY * 2))
+            };
+        }
         return {
             x: rect.right - (rect.width * 0.1), // 右上角，距离右边缘 10%
             y: rect.top + (rect.height * 0.1)   // 右上角，距离上边缘 10%
@@ -161,6 +332,42 @@
                 const match = nodes.find(node => (node.textContent || '').trim().includes(text) && isElementVisible(node));
                 if (match) return match;
             }
+            await new Promise(r => setTimeout(r, 100));
+        }
+        return null;
+    }
+
+    async function waitForStableProcessButton(timeout = 10000) {
+        const selectors = ['button', '.el-button', 'a.el-button'];
+        const startTime = Date.now();
+        let lastButton = null;
+        let stableSince = 0;
+
+        while (Date.now() - startTime < timeout) {
+            if (!isRunning || manualStopped) return null;
+            if ((window.location.href || '').includes('librarySignature')) return null;
+
+            await waitForLoadingGone(3000);
+            const candidates = selectors.flatMap(selector => Array.from(document.querySelectorAll(selector)));
+            const button = candidates.find(node => {
+                const text = (node.textContent || '').trim();
+                return text.includes('处理') && isElementClickable(node);
+            });
+
+            if (button) {
+                if (button === lastButton) {
+                    if (Date.now() - stableSince >= 300) {
+                        return button;
+                    }
+                } else {
+                    lastButton = button;
+                    stableSince = Date.now();
+                }
+            } else {
+                lastButton = null;
+                stableSince = 0;
+            }
+
             await new Promise(r => setTimeout(r, 100));
         }
         return null;
@@ -503,6 +710,10 @@
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
 
+            console.log('等待列表刷新完成...');
+            setStatus('初始化流程：等待列表刷新完成');
+            await waitForLoadingGone(15000);
+
             // 3. 等待并点击处理按钮（持续等待直到出现为止）
             console.log('第二步：等待处理按钮出现...');
             setStatus('初始化流程：等待处理按钮');
@@ -516,7 +727,7 @@
                 if ((window.location.href || '').includes('librarySignature')) {
                     break;
                 }
-                processButton = await waitForElementByText(['button', '.el-button', 'a.el-button'], '处理', 3000);
+                processButton = await waitForStableProcessButton(3000);
                 if (processButton) break;
                 await new Promise(r => setTimeout(r, 500));
             }
@@ -1168,6 +1379,7 @@
         if (button) {
             button.innerHTML = running ? '停止运行' : '运行';
         }
+        updateSettingsButtonState(running);
     }
 
     // 修改startProcess函数
@@ -1177,6 +1389,8 @@
             return;
         }
         
+        const selectedPosition = getSignPositionMode();
+        console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);
         console.log('启动处理流程');
         isRunning = true;
         updateRunningState(true);
@@ -1184,7 +1398,7 @@
         acquireWakeLock();
         // 开启自动关闭完成确认弹窗
         startAutoCloseMessageBox();
-        setStatus('运行中：初始化页面类型...');
+        setStatus(`运行中：签字位置 ${getSignPositionLabel(selectedPosition)}`);
         
         // 检查是否是签名页面
         if (window.location.href.includes('esign.hl.chinamobile.com/pageseal/signature')) {
