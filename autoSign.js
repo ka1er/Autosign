@@ -1,10 +1,12 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.5
+// @version      1.1.6
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
+// @match        *://cpms.hq.cmcc/*
+// @match        *://*/pageseal/signature*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
@@ -256,7 +258,7 @@
             return { x: rect.right - marginX, y: rect.bottom - marginY };
         }
         if (mode === 'center') {
-            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.5) };
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.25) };
         }
         if (mode === 'random') {
             return {
@@ -1484,6 +1486,17 @@
         updateSettingsButtonState(running);
     }
 
+    function runProcessHandler(handler, label) {
+        Promise.resolve()
+            .then(handler)
+            .catch(error => {
+                console.error(`${label}执行出错:`, error);
+            })
+            .finally(() => {
+                processStarted = false;
+            });
+    }
+
     // 修改startProcess函数
     function startProcess() {
         if (manualStopped) {
@@ -1509,9 +1522,9 @@
         setStatus(`运行中：签字位置 ${getSignPositionLabel(selectedPosition)}`);
         
         // 检查是否是签名页面
-        if (window.location.href.includes('esign.hl.chinamobile.com/pageseal/signature')) {
+        if (window.location.href.includes('pageseal/signature')) {
             console.log('在签名页面启动流程');
-            handleSignaturePage();
+            runProcessHandler(handleSignaturePage, '签名页面流程');
             return;
         }
 
@@ -1519,13 +1532,14 @@
         const pageType = getPageType();
         switch (pageType) {
             case 'todoList':
-                initializeProcess();
+                runProcessHandler(initializeProcess, '待办页面初始化流程');
                 return; // 添加这一行，避免继续执行
             case 'librarySignature':
-                handleBatchSignaturePage();
+                runProcessHandler(handleBatchSignaturePage, '批量签章页面流程');
                 break;
             default:
                 console.log('未知页面类型');
+                processStarted = false;
                 break;
         }
     }
@@ -1546,6 +1560,16 @@
         }
         
         updateRunningState(false, !manual);
+
+        if (!manual) {
+            // 恢复 1.1.1 的自动停止刷新行为，用页面重新加载重新进入下一轮流程。
+            const highestTimeoutId = setTimeout(";");
+            for (let i = 0; i < highestTimeoutId; i++) {
+                clearTimeout(i);
+            }
+            window.stop();
+            location.reload();
+        }
     }
 
     // 批量签章页面的处理流程
