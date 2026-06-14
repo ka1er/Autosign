@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.6
+// @version      1.1.7
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -17,6 +17,9 @@
 
     const SIGN_POSITION_KEY = 'autoSignPosition';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
+    const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
+    const BATCH_LAST_TOTAL_KEY = 'autoSignLastBatchTotal';
+    const BATCH_LAST_SELECTED_KEY = 'autoSignLastBatchSelected';
     const SIGN_POSITION_OPTIONS = [
         { value: 'top-left', label: '左上' },
         { value: 'bottom-left', label: '左下' },
@@ -557,6 +560,117 @@
             await new Promise(r => setTimeout(r, 100));
         }
         return null;
+    }
+
+    function getVisibleBatchTotalElement(scope) {
+        const root = scope || document;
+        const totals = Array.from(root.querySelectorAll('.el-pagination__total'));
+        return totals.find(el => isElementVisible(el) && /共\s*\d+\s*条/.test(el.textContent || '')) || null;
+    }
+
+    function getBatchTotalCount(scope) {
+        const totalEl = getVisibleBatchTotalElement(scope) || getVisibleBatchTotalElement(document);
+        if (!totalEl) return null;
+        const match = (totalEl.textContent || '').match(/共\s*(\d+)\s*条/);
+        return match ? Number(match[1]) : null;
+    }
+
+    function getVisibleBatchRowCount(scope) {
+        const root = scope || document;
+        return Array.from(root.querySelectorAll('.el-table__body-wrapper .el-checkbox__input'))
+            .filter(el => isElementVisible(el.closest('.el-checkbox') || el))
+            .length;
+    }
+
+    function getCheckedBatchRowCount(scope) {
+        const root = scope || document;
+        return Array.from(root.querySelectorAll('.el-table__body-wrapper .el-checkbox__input.is-checked'))
+            .filter(el => isElementVisible(el.closest('.el-checkbox') || el))
+            .length;
+    }
+
+    function findBatchQueryButton(scope) {
+        const roots = [scope, document].filter(Boolean);
+        for (const root of roots) {
+            const buttons = Array.from(root.querySelectorAll('button.el-button, button'));
+            const button = buttons.find(btn => {
+                const text = (btn.textContent || '').trim();
+                return text.includes('查询') && isElementClickable(btn);
+            });
+            if (button) return button;
+        }
+        return null;
+    }
+
+    function hasSubmittedBatchOnce() {
+        return sessionStorage.getItem(BATCH_SUBMITTED_KEY) === 'true';
+    }
+
+    function markBatchSubmitted(totalCount, selectedCount) {
+        sessionStorage.setItem(BATCH_SUBMITTED_KEY, 'true');
+        if (typeof totalCount === 'number') {
+            sessionStorage.setItem(BATCH_LAST_TOTAL_KEY, String(totalCount));
+        }
+        if (typeof selectedCount === 'number') {
+            sessionStorage.setItem(BATCH_LAST_SELECTED_KEY, String(selectedCount));
+        }
+    }
+
+    function resetBatchSubmitted() {
+        sessionStorage.removeItem(BATCH_SUBMITTED_KEY);
+        sessionStorage.removeItem(BATCH_LAST_TOTAL_KEY);
+        sessionStorage.removeItem(BATCH_LAST_SELECTED_KEY);
+    }
+
+    function getExpectedStableMaxCount() {
+        const lastTotal = Number(sessionStorage.getItem(BATCH_LAST_TOTAL_KEY));
+        const lastSelected = Number(sessionStorage.getItem(BATCH_LAST_SELECTED_KEY));
+        if (!Number.isFinite(lastTotal) || !Number.isFinite(lastSelected) || lastSelected <= 0) {
+            return null;
+        }
+        return Math.max(lastTotal - lastSelected, 0);
+    }
+
+    async function waitForBatchListStable(dialog, interval = 2000, timeout = 60000) {
+        const start = Date.now();
+        let lastCount = null;
+        const expectedStableMax = getExpectedStableMaxCount();
+
+        while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return false;
+
+            const queryButton = findBatchQueryButton(dialog);
+            if (queryButton) {
+                setStatus('批量签章：刷新待签章列表...');
+                await performReliableClick(queryButton);
+            } else {
+                console.log('未找到查询按钮，使用当前列表数量进行稳定性判断');
+            }
+
+            await waitForLoadingGone(15000);
+            await new Promise(r => setTimeout(r, 300));
+
+            const currentCount = getBatchTotalCount(dialog);
+            const comparableCount = currentCount === null ? getVisibleBatchRowCount(dialog) : currentCount;
+            console.log('当前待签章数量:', comparableCount);
+            setStatus(`批量签章：待签章数量 ${comparableCount}`);
+
+            const reachedExpectedDrop = expectedStableMax === null || comparableCount <= expectedStableMax;
+            if (!reachedExpectedDrop) {
+                console.log('待签章数量尚未降到上一轮提交后的预期范围:', comparableCount, '>', expectedStableMax);
+            }
+
+            if (lastCount !== null && comparableCount === lastCount && reachedExpectedDrop) {
+                console.log('待签章数量已稳定:', comparableCount);
+                return true;
+            }
+
+            lastCount = comparableCount;
+            await new Promise(r => setTimeout(r, interval));
+        }
+
+        notifyAttention('待签章列表长时间未稳定，请人工检查列表刷新状态。');
+        return false;
     }
 
     // 点击表头选择列复选框以全选当前页
@@ -1508,6 +1622,10 @@
             return;
         }
         
+        const wasAlreadyRunning = localStorage.getItem('autoSignRunning') === 'true' || sessionStorage.getItem('autoSignRunning') === 'true';
+        if (!wasAlreadyRunning) {
+            resetBatchSubmitted();
+        }
         const selectedPosition = getSignPositionMode();
         console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);
         console.log('启动处理流程');
@@ -1555,6 +1673,7 @@
         
         if (manual) {
             manualStopped = true;
+            resetBatchSubmitted();
             try { GM_setValue && GM_setValue(MANUAL_STOP_KEY, true); } catch (e) {}
             console.log('已标记为手动停止，将不会自动重启');
         }
@@ -1586,20 +1705,39 @@
                 }
                 // 打开弹窗
                 console.log('%c点击批量签章按钮', 'color: green');
-                setStatus('批量签章：等待列表更新 10s...');
+                setStatus('批量签章：打开批量签章弹窗');
                 const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
                 await performReliableClick(linkElement || batchSignLink);
-                await new Promise(r => setTimeout(r, 10000));
                 const dialog = await waitForDialogByHeaderText('批量签章', 15000);
                 if (!dialog) {
                     console.log('%c未找到批量签章对话框，1s 后重试', 'color: red');
                     await new Promise(r => setTimeout(r, 1000));
                     continue;
                 }
+
+                await waitForLoadingGone(15000);
+                if (hasSubmittedBatchOnce()) {
+                    const stable = await waitForBatchListStable(dialog);
+                    if (!stable) {
+                        stopProcess(true);
+                        return false;
+                    }
+                }
+
+                await waitForLoadingGone(15000);
+                const totalCount = getBatchTotalCount(dialog);
+                if (totalCount === 0) {
+                    console.log('批量签章弹窗显示没有待签章文件，停止流程');
+                    setStatus('批量签章：没有待签章文件');
+                    const cancelBtn = dialog.querySelector('.el-dialog__footer .el-button--default') || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消') || (b.textContent || '').includes('关闭'));
+                    if (cancelBtn) await performReliableClick(cancelBtn);
+                    stopProcess(true);
+                    return true;
+                }
+
                 console.log('等待复选框加载...');
                 setStatus('批量签章：加载列表与勾选...');
                 await waitForElement('.el-dialog__body .el-checkbox__input, .el-dialog__body .el-checkbox__original', 15000, true);
-                await waitForLoadingGone(15000);
 
                 // 勾选逻辑：表头全选 → 回退逐一勾选 → 滚动补齐
                 let okSelected = await selectAllCurrentPageInDialog();
@@ -1642,8 +1780,10 @@
                     continue;
                 }
                 await waitForLoadingGone(8000);
+                const selectedCount = getCheckedBatchRowCount(dialog);
                 await performReliableClick(confirmButton);
                 console.log('确定按钮点击成功');
+                markBatchSubmitted(totalCount, selectedCount);
                 setStatus('批量签章：已提交签名');
                 return true;
             }
