@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.7
+// @version      1.1.8-beta
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -16,10 +16,43 @@
     'use strict';
 
     const SIGN_POSITION_KEY = 'autoSignPosition';
+    const AUTO_SIGN_STATE_KEY = 'autoSignState';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
     const BATCH_LAST_TOTAL_KEY = 'autoSignLastBatchTotal';
     const BATCH_LAST_SELECTED_KEY = 'autoSignLastBatchSelected';
+    const AUTO_SIGN_STATES = Object.freeze({
+        IDLE: 'idle',
+        RUNNING: 'running',
+        STOPPED: 'stopped',
+        ERROR: 'error'
+    });
+    const SELECTORS = Object.freeze({
+        batchSignIcon: 'i.icon.font_family.icon-piliangchuli',
+        batchDialog: '.el-dialog',
+        batchDialogBodyCheckbox: '.el-dialog__body .el-checkbox__input, .el-dialog__body .el-checkbox__original',
+        batchBodyCheckboxInput: '.el-table__body-wrapper .el-checkbox__input',
+        batchCheckedCheckboxInput: '.el-table__body-wrapper .el-checkbox__input.is-checked',
+        batchBodyUncheckedCheckboxInput: '.el-table__body-wrapper .el-checkbox__input:not(.is-checked)',
+        batchBodyWrapper: '.el-table__body-wrapper',
+        batchHeaderCheckboxInput: '.el-dialog__body th.el-table-column--selection .el-checkbox__input, .el-dialog__body .el-table__header-wrapper th.el-table-column--selection .el-checkbox__input, th.el-table-column--selection .el-checkbox__input',
+        batchHeaderCheckbox: '.el-dialog__body th.el-table-column--selection .el-checkbox__input, .el-dialog__body th.el-table-column--selection .el-checkbox, .el-dialog__body .el-table__header-wrapper th .el-checkbox, .el-dialog__body .el-table__header-wrapper .el-checkbox',
+        batchPaginationTotal: '.el-pagination__total',
+        dialogHeader: '.el-dialog__header',
+        dialogFooterButton: '.el-dialog__footer .el-button',
+        dialogDefaultFooterButton: '.el-dialog__footer .el-button--default',
+        dialogPrimaryFooterButton: '.el-dialog__footer .dialog-footer button.el-button--primary',
+        elementButton: 'button.el-button',
+        signEntryButton: 'button.el-button.el-button--primary.is-plain',
+        fileListItem: 'ul.tempList li.flex',
+        pendingStatus: '.status-box.status-pending',
+        fileTitle: '.tem-title',
+        signatureCanvas: 'canvas.canvasstyle',
+        signatureModule: 'div.carousel-i-New',
+        primaryButton: 'button.el-button--primary',
+        messageBox: '.el-message-box',
+        loadingMask: '.el-loading-mask'
+    });
     const SIGN_POSITION_OPTIONS = [
         { value: 'top-left', label: '左上' },
         { value: 'bottom-left', label: '左下' },
@@ -28,6 +61,26 @@
         { value: 'center', label: '中间' },
         { value: 'random', label: '随机位置' }
     ];
+
+    function getControlToolbar() {
+        let toolbar = document.querySelector('div[data-auto-sign-toolbar]');
+        if (toolbar) {
+            return toolbar;
+        }
+
+        toolbar = document.createElement('div');
+        toolbar.setAttribute('data-auto-sign-toolbar', 'true');
+        toolbar.style.position = 'fixed';
+        toolbar.style.top = '10px';
+        toolbar.style.left = '10px';
+        toolbar.style.zIndex = '9999';
+        toolbar.style.display = 'flex';
+        toolbar.style.alignItems = 'center';
+        toolbar.style.gap = '8px';
+        toolbar.style.pointerEvents = 'auto';
+        document.body.appendChild(toolbar);
+        return toolbar;
+    }
 
     // 创建控制按钮
     let statusBadge = null;
@@ -40,12 +93,8 @@
 
         const button = document.createElement('button');
         button.setAttribute('data-auto-sign-control', 'true');
-        const isRunning = localStorage.getItem('autoSignRunning') === 'true';
+        const isRunning = isAutoSignRunningState();
         button.innerHTML = isRunning ? '停止运行' : '运行';
-        button.style.position = 'fixed';
-        button.style.top = '10px';
-        button.style.left = '10px';
-        button.style.zIndex = '9999';
         button.style.padding = '8px 16px';
         button.style.cursor = 'pointer';
         button.style.backgroundColor = '#409EFF';
@@ -64,7 +113,7 @@
 
         // 修改点击事件处理
         button.onclick = function() {
-            const currentRunning = localStorage.getItem('autoSignRunning') === 'true';
+            const currentRunning = isAutoSignRunningState();
             console.log('按钮点击，当前运行状态:', currentRunning);
             
             if (currentRunning) {
@@ -73,28 +122,28 @@
             } else {
                 console.log('启动脚本运行');
                 manualStopped = false; // 重置手动停止标记
-                try { GM_setValue && GM_setValue(MANUAL_STOP_KEY, false); } catch (e) {}
                 startProcess();
             }
         };
         
-        document.body.appendChild(button);
+        const toolbar = getControlToolbar();
+        toolbar.appendChild(button);
         createSettingsButton();
         if (!statusBadge) {
             statusBadge = document.createElement('span');
             statusBadge.setAttribute('data-auto-sign-status', 'true');
-            statusBadge.style.position = 'fixed';
-            statusBadge.style.top = '10px';
-            statusBadge.style.left = '150px';
-            statusBadge.style.zIndex = '9999';
             statusBadge.style.padding = '6px 10px';
             statusBadge.style.backgroundColor = '#303133';
             statusBadge.style.color = '#fff';
             statusBadge.style.borderRadius = '4px';
             statusBadge.style.fontSize = '12px';
             statusBadge.style.opacity = '0.9';
+            statusBadge.style.whiteSpace = 'nowrap';
+            statusBadge.style.maxWidth = '360px';
+            statusBadge.style.overflow = 'hidden';
+            statusBadge.style.textOverflow = 'ellipsis';
             statusBadge.innerText = '就绪';
-            document.body.appendChild(statusBadge);
+            toolbar.appendChild(statusBadge);
         }
         return button;
     }
@@ -123,6 +172,51 @@
         localStorage.setItem(SIGN_POSITION_KEY, mode);
     }
 
+    function normalizeAutoSignState(state) {
+        return Object.values(AUTO_SIGN_STATES).includes(state) ? state : AUTO_SIGN_STATES.IDLE;
+    }
+
+    function getAutoSignState() {
+        let gmState = null;
+        try { gmState = GM_getValue && GM_getValue(AUTO_SIGN_STATE_KEY); } catch (e) {}
+        if (Object.values(AUTO_SIGN_STATES).includes(gmState)) {
+            return gmState;
+        }
+
+        const localRawState = localStorage.getItem(AUTO_SIGN_STATE_KEY);
+        if (Object.values(AUTO_SIGN_STATES).includes(localRawState)) {
+            return localRawState;
+        }
+
+        return AUTO_SIGN_STATES.IDLE;
+    }
+
+    function setAutoSignState(state, syncGmState = true) {
+        const normalizedState = normalizeAutoSignState(state);
+        const running = normalizedState === AUTO_SIGN_STATES.RUNNING;
+        const stopped = normalizedState === AUTO_SIGN_STATES.STOPPED;
+
+        if (syncGmState) {
+            try { GM_setValue && GM_setValue(AUTO_SIGN_STATE_KEY, normalizedState); } catch (e) {}
+            try { GM_setValue && GM_setValue('autoSignRunning', running); } catch (e) {}
+            try { GM_setValue && GM_setValue(MANUAL_STOP_KEY, stopped); } catch (e) {}
+        }
+        localStorage.setItem(AUTO_SIGN_STATE_KEY, normalizedState);
+        sessionStorage.setItem(AUTO_SIGN_STATE_KEY, normalizedState);
+        localStorage.setItem('autoSignRunning', String(running));
+        sessionStorage.setItem('autoSignRunning', String(running));
+        manualStopped = stopped;
+        return normalizedState;
+    }
+
+    function isAutoSignRunningState() {
+        return getAutoSignState() === AUTO_SIGN_STATES.RUNNING;
+    }
+
+    function isAutoSignManuallyStoppedState() {
+        return getAutoSignState() === AUTO_SIGN_STATES.STOPPED;
+    }
+
     function createSettingsButton() {
         if (document.querySelector('button[data-auto-sign-settings]')) {
             return;
@@ -131,10 +225,6 @@
         const settingsButton = document.createElement('button');
         settingsButton.setAttribute('data-auto-sign-settings', 'true');
         settingsButton.innerHTML = '设置';
-        settingsButton.style.position = 'fixed';
-        settingsButton.style.top = '10px';
-        settingsButton.style.left = '100px';
-        settingsButton.style.zIndex = '9999';
         settingsButton.style.padding = '8px 12px';
         settingsButton.style.cursor = 'pointer';
         settingsButton.style.backgroundColor = '#67C23A';
@@ -145,23 +235,24 @@
         settingsButton.style.fontWeight = 'bold';
 
         settingsButton.onmouseover = function() {
-            if (localStorage.getItem('autoSignRunning') !== 'true') {
+            if (!isAutoSignRunningState()) {
                 this.style.backgroundColor = '#85ce61';
             }
         };
         settingsButton.onmouseout = function() {
-            this.style.backgroundColor = localStorage.getItem('autoSignRunning') === 'true' ? '#A0CFFF' : '#67C23A';
+            this.style.backgroundColor = isAutoSignRunningState() ? '#A0CFFF' : '#67C23A';
         };
         settingsButton.onclick = function() {
-            if (localStorage.getItem('autoSignRunning') === 'true') {
+            if (isAutoSignRunningState()) {
                 setStatus('运行中：停止后才能修改签字位置');
                 return;
             }
             toggleSettingsPanel();
         };
 
-        document.body.appendChild(settingsButton);
-        updateSettingsButtonState(localStorage.getItem('autoSignRunning') === 'true');
+        const toolbar = getControlToolbar();
+        toolbar.appendChild(settingsButton);
+        updateSettingsButtonState(isAutoSignRunningState());
     }
 
     function toggleSettingsPanel() {
@@ -174,7 +265,7 @@
         panel = document.createElement('div');
         panel.setAttribute('data-auto-sign-settings-panel', 'true');
         panel.style.position = 'fixed';
-        panel.style.top = '50px';
+        panel.style.top = '48px';
         panel.style.left = '10px';
         panel.style.zIndex = '9999';
         panel.style.padding = '10px';
@@ -197,7 +288,7 @@
         select.style.border = '1px solid #dcdfe6';
         select.style.borderRadius = '4px';
         select.style.backgroundColor = '#fff';
-        select.disabled = localStorage.getItem('autoSignRunning') === 'true';
+        select.disabled = isAutoSignRunningState();
 
         const currentMode = getSignPositionMode();
         SIGN_POSITION_OPTIONS.forEach(option => {
@@ -208,7 +299,7 @@
             select.appendChild(item);
         });
         select.onchange = function() {
-            if (localStorage.getItem('autoSignRunning') === 'true') {
+            if (isAutoSignRunningState()) {
                 this.value = getSignPositionMode();
                 setStatus('运行中：停止后才能修改签字位置');
                 return;
@@ -371,15 +462,15 @@
     async function waitForDialogButtonByText(dialogTitle, buttonText, timeout = 10000) {
         const startTime = Date.now();
         while (Date.now() - startTime < timeout) {
-            const dialogs = Array.from(document.querySelectorAll('.el-dialog')).filter(dialog => {
+            const dialogs = Array.from(document.querySelectorAll(SELECTORS.batchDialog)).filter(dialog => {
                 if (!isElementVisible(dialog)) return false;
                 if (!dialogTitle) return true;
-                const header = dialog.querySelector('.el-dialog__header');
+                const header = dialog.querySelector(SELECTORS.dialogHeader);
                 return header && (header.textContent || '').includes(dialogTitle);
             });
 
             for (const dialog of dialogs) {
-                const button = findClickableElementByText(dialog, ['.el-dialog__footer .el-button', 'button.el-button'], buttonText);
+                const button = findClickableElementByText(dialog, [SELECTORS.dialogFooterButton, SELECTORS.elementButton], buttonText);
                 if (button) return button;
             }
 
@@ -539,7 +630,7 @@
     // 等待加载遮罩消失（Element UI 的 .el-loading-mask）
     async function waitForLoadingGone(timeout = 15000) {
         const startTime = Date.now();
-        const isAnyMaskVisible = () => Array.from(document.querySelectorAll('.el-loading-mask')).some(isElementVisible);
+        const isAnyMaskVisible = () => Array.from(document.querySelectorAll(SELECTORS.loadingMask)).some(isElementVisible);
         while (Date.now() - startTime < timeout) {
             if (!isAnyMaskVisible()) return true;
             await new Promise(r => setTimeout(r, 100));
@@ -551,9 +642,9 @@
     async function waitForDialogByHeaderText(text, timeout = 10000) {
         const startTime = Date.now();
         while (Date.now() - startTime < timeout) {
-            const dialogs = Array.from(document.querySelectorAll('.el-dialog'));
+            const dialogs = Array.from(document.querySelectorAll(SELECTORS.batchDialog));
             const found = dialogs.find(dlg => {
-                const header = dlg.querySelector('.el-dialog__header');
+                const header = dlg.querySelector(SELECTORS.dialogHeader);
                 return header && (header.textContent || '').includes(text) && isElementVisible(dlg);
             });
             if (found) return found;
@@ -564,7 +655,7 @@
 
     function getVisibleBatchTotalElement(scope) {
         const root = scope || document;
-        const totals = Array.from(root.querySelectorAll('.el-pagination__total'));
+        const totals = Array.from(root.querySelectorAll(SELECTORS.batchPaginationTotal));
         return totals.find(el => isElementVisible(el) && /共\s*\d+\s*条/.test(el.textContent || '')) || null;
     }
 
@@ -577,14 +668,14 @@
 
     function getVisibleBatchRowCount(scope) {
         const root = scope || document;
-        return Array.from(root.querySelectorAll('.el-table__body-wrapper .el-checkbox__input'))
+        return Array.from(root.querySelectorAll(SELECTORS.batchBodyCheckboxInput))
             .filter(el => isElementVisible(el.closest('.el-checkbox') || el))
             .length;
     }
 
     function getCheckedBatchRowCount(scope) {
         const root = scope || document;
-        return Array.from(root.querySelectorAll('.el-table__body-wrapper .el-checkbox__input.is-checked'))
+        return Array.from(root.querySelectorAll(SELECTORS.batchCheckedCheckboxInput))
             .filter(el => isElementVisible(el.closest('.el-checkbox') || el))
             .length;
     }
@@ -641,7 +732,7 @@
 
             const queryButton = findBatchQueryButton(dialog);
             if (queryButton) {
-                setStatus('批量签章：刷新待签章列表...');
+                setStatus('正在刷新待签章列表...');
                 await performReliableClick(queryButton);
             } else {
                 console.log('未找到查询按钮，使用当前列表数量进行稳定性判断');
@@ -653,7 +744,7 @@
             const currentCount = getBatchTotalCount(dialog);
             const comparableCount = currentCount === null ? getVisibleBatchRowCount(dialog) : currentCount;
             console.log('当前待签章数量:', comparableCount);
-            setStatus(`批量签章：待签章数量 ${comparableCount}`);
+            setStatus(`正在刷新待签章列表，当前待签 ${comparableCount} 条`);
 
             const reachedExpectedDrop = expectedStableMax === null || comparableCount <= expectedStableMax;
             if (!reachedExpectedDrop) {
@@ -680,9 +771,7 @@
             await waitForLoadingGone(15000);
             // 兼容不同结构：优先在对话框作用域内查找表头选择列
             const headerInput = await waitForElement(
-                '.el-dialog__body th.el-table-column--selection .el-checkbox__input, ' +
-                '.el-dialog__body .el-table__header-wrapper th.el-table-column--selection .el-checkbox__input, ' +
-                'th.el-table-column--selection .el-checkbox__input',
+                SELECTORS.batchHeaderCheckboxInput,
                 10000,
                 true
             );
@@ -695,7 +784,7 @@
             // 最长 3s 轮询，等待表体行全部 is-checked
             const start = Date.now();
             while (Date.now() - start < 3000) {
-                const bodyInputs = Array.from(document.querySelectorAll('.el-dialog__body .el-table__body-wrapper .el-checkbox__input, .el-table__body-wrapper .el-checkbox__input'));
+                const bodyInputs = Array.from(document.querySelectorAll(`${SELECTORS.batchDialog} ${SELECTORS.batchBodyCheckboxInput}, ${SELECTORS.batchBodyCheckboxInput}`));
                 if (bodyInputs.length > 0 && bodyInputs.every(i => i.classList.contains('is-checked'))) {
                     return true;
                 }
@@ -713,7 +802,7 @@
         try {
             const scope = container || document;
             // 优先尝试表头“全选”（弹窗内表格）
-            const headerCheck = scope.querySelector('.el-dialog__body th.el-table-column--selection .el-checkbox__input, .el-dialog__body th.el-table-column--selection .el-checkbox, .el-dialog__body .el-table__header-wrapper th .el-checkbox, .el-dialog__body .el-table__header-wrapper .el-checkbox');
+            const headerCheck = scope.querySelector(SELECTORS.batchHeaderCheckbox);
             if (headerCheck) {
                 const headerLabel = headerCheck.classList.contains('el-checkbox__input') ? (headerCheck.closest('.el-checkbox') || headerCheck) : headerCheck;
                 const headerInput = headerLabel.querySelector('.el-checkbox__input') || headerCheck;
@@ -722,7 +811,7 @@
                     // 等待表体勾选状态同步
                     const startHeaderWait = Date.now();
                     while (Date.now() - startHeaderWait < 3000) {
-                        const bodyInputs = Array.from(scope.querySelectorAll('.el-table__body-wrapper .el-checkbox__input'));
+                        const bodyInputs = Array.from(scope.querySelectorAll(SELECTORS.batchBodyCheckboxInput));
                         if (bodyInputs.length > 0 && bodyInputs.every(i => i.classList.contains('is-checked'))) {
                             return true;
                         }
@@ -730,7 +819,7 @@
                     }
                 } else {
                     // 表头已经是选中状态，校验表体
-                    const bodyInputs = Array.from(scope.querySelectorAll('.el-table__body-wrapper .el-checkbox__input'));
+                    const bodyInputs = Array.from(scope.querySelectorAll(SELECTORS.batchBodyCheckboxInput));
                     if (bodyInputs.length > 0 && bodyInputs.every(i => i.classList.contains('is-checked'))) {
                         return true;
                     }
@@ -738,13 +827,13 @@
             }
 
             // 如果还有未勾选，遍历主体行
-            let bodyUnchecked = Array.from(scope.querySelectorAll('.el-table__body-wrapper .el-checkbox__input:not(.is-checked)'));
+            let bodyUnchecked = Array.from(scope.querySelectorAll(SELECTORS.batchBodyUncheckedCheckboxInput));
             if (bodyUnchecked.length) {
-                const body = scope.querySelector('.el-table__body-wrapper');
+                const body = scope.querySelector(SELECTORS.batchBodyWrapper);
                 if (body && body.scrollHeight > body.clientHeight) {
                     body.scrollTop = 0;
                 }
-                const wrappers = scope.querySelectorAll('.el-table__body-wrapper .el-checkbox');
+                const wrappers = scope.querySelectorAll(`${SELECTORS.batchBodyWrapper} .el-checkbox`);
                 for (let wrapper of wrappers) {
                     const input = wrapper.querySelector('.el-checkbox__input');
                     if (input && !input.classList.contains('is-checked')) {
@@ -758,7 +847,7 @@
             // 二次确认（防异步渲染遗漏）：再次轮询直到全选或超时
             const start = Date.now();
             while (Date.now() - start < 3000) {
-                const rest = scope.querySelectorAll('.el-table__body-wrapper .el-checkbox__input:not(.is-checked)');
+                const rest = scope.querySelectorAll(SELECTORS.batchBodyUncheckedCheckboxInput);
                 if (rest.length === 0) break;
                 for (let el of Array.from(rest)) {
                     const wrapper = el.closest('.el-checkbox');
@@ -770,8 +859,8 @@
                 }
             }
 
-            const allChecked = Array.from(scope.querySelectorAll('.el-table__body-wrapper .el-checkbox__input')).every(c => c.classList.contains('is-checked'));
-            return allChecked || !!(scope.querySelector('.el-table__body-wrapper')?.querySelectorAll('.el-checkbox__input').length);
+            const allChecked = Array.from(scope.querySelectorAll(SELECTORS.batchBodyCheckboxInput)).every(c => c.classList.contains('is-checked'));
+            return allChecked || !!(scope.querySelector(SELECTORS.batchBodyWrapper)?.querySelectorAll('.el-checkbox__input').length);
         } catch (e) {
             console.error('checkAllBoxesIn 出错:', e);
             return false;
@@ -828,7 +917,7 @@
         }
 
         // 方法2：通过常见按钮类名查找
-        const signButton2 = findClickableElementByText(document, 'button.el-button.el-button--primary.is-plain', '电子签章');
+        const signButton2 = findClickableElementByText(document, SELECTORS.signEntryButton, '电子签章');
         if (signButton2) {
             console.log('通过类名和属性找到电子签章按钮');
             return signButton2;
@@ -852,21 +941,21 @@
     async function initializeProcess() {
         try {
             console.log('开始初始化流程...');
-            setStatus('初始化流程：开始处理');
+            setStatus('正在启动自动签章流程...');
             
             // 1. 首先等待并点击电子签章按钮
             console.log('第一步：查找电子签章按钮');
-            setStatus('初始化流程：查找电子签章按钮');
+            setStatus('正在查找电子签章入口...');
             const signButton = await findSignButton();
             if (!signButton) {
                 console.log('未找到电子签章按钮，停止流程');
-                setStatus('错误：未找到电子签章按钮');
+                setStatus('未找到电子签章入口，请刷新页面后重试');
                 return false;
             }
 
             // 2. 点击电子签章按钮
             console.log('点击电子签章按钮');
-            setStatus('初始化流程：点击电子签章按钮');
+            setStatus('正在进入电子签章流程...');
             // 添加防止重复点击的标记
             if (signButton.dataset.clicked) {
                 console.log('电子签章按钮已经被点击过，跳过');
@@ -891,12 +980,12 @@
             }
 
             console.log('等待列表刷新完成...');
-            setStatus('初始化流程：等待列表刷新完成');
+            setStatus('正在等待待办列表刷新...');
             await waitForLoadingGone(15000);
 
             // 3. 等待并点击处理按钮（持续等待直到出现为止）
             console.log('第二步：等待处理按钮出现...');
-            setStatus('初始化流程：等待处理按钮');
+            setStatus('正在查找处理按钮...');
             let processButton = null;
             while (true) {
                 if (!isRunning || manualStopped) {
@@ -913,42 +1002,42 @@
             }
             if (processButton) {
                 console.log('点击处理按钮');
-                setStatus('初始化流程：点击处理按钮');
+                setStatus('正在打开待处理签章任务...');
                 await performReliableClick(processButton);
             }
             // 等待跳转到批量签章页或批量签章按钮出现
-            setStatus('初始化流程：等待跳转到批量签章页面');
+            setStatus('正在等待进入批量签章页面...');
             const jumpedToList = await waitForUrlIncludes('librarySignature', 15000);
             if (!jumpedToList) {
-                await waitForElement('i.icon.font_family.icon-piliangchuli', 15000, true);
+                await waitForElement(SELECTORS.batchSignIcon, 15000, true);
             }
             
             // 4. 点击“批量签章”并在弹窗内操作
             console.log('第三步：等待批量签章按钮出现...');
-            setStatus('初始化流程：等待批量签章按钮');
-            const batchSignLink = await waitForElement('i.icon.font_family.icon-piliangchuli', 15000, true);
+            setStatus('正在查找批量签章按钮...');
+            const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 15000, true);
             if (!batchSignLink) {
                 console.log('未找到批量签章按钮');
-                setStatus('错误：未找到批量签章按钮');
+                setStatus('未找到批量签章按钮，请刷新页面后重试');
                 return false;
             }
 
             console.log('点击批量签章按钮');
-            setStatus('初始化流程：点击批量签章按钮');
+            setStatus('正在打开批量签章窗口...');
             const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
             await performReliableClick(linkElement || batchSignLink);
 
             // 等待“批量签章”对话框（回退一开始的方式：直接等复选框并全选）
             await new Promise(resolve => setTimeout(resolve, 1000));
             console.log('第四步：优先尝试表头全选');
-            setStatus('初始化流程：选择待签章文件');
+            setStatus('正在勾选待签章文件...');
             const headerSelected2 = await selectAllCurrentPageInDialog();
             if (!headerSelected2) {
                 console.log('表头全选未成功，回退到原始逐一勾选');
                 const checkbox = await waitForElement('.el-checkbox__original', 10000, true);
                 if (!checkbox) {
                     console.log('未找到复选框');
-                    setStatus('错误：未找到复选框');
+                    setStatus('未找到待签文件复选框，请刷新页面后重试');
                     return false;
                 }
                 console.log('选中复选框...');
@@ -986,7 +1075,7 @@
         
         // 查找批量签章按钮
         console.log('查找批量签章按钮...');
-        const batchSignLink = await waitForElement('i.icon.font_family.icon-piliangchuli', 10000, true);
+        const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 10000, true);
         if (batchSignLink && isRunning && !manualStopped) {
             console.log('找到批量签章按钮，准备点击');
             // 从图标元素找到最近的a标签父元素并点击
@@ -1033,7 +1122,7 @@
 
                 // 查找批量签章按钮
                 console.log('查找批量签章按钮...');
-                const batchSignLink = await waitForElement('i.icon.font_family.icon-piliangchuli', 10000, true);
+                const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 10000, true);
                 if (!batchSignLink || !isRunning) {
                     console.log('未找到批量签章按钮或收到停止信号');
                     return false;
@@ -1054,7 +1143,7 @@
                 await new Promise(resolve => setTimeout(resolve, 1500));
 
                 // 检查是否有可选择的文件
-                const checkboxes = document.querySelectorAll('.el-table__body-wrapper .el-checkbox__input:not(.is-checked)');
+                const checkboxes = document.querySelectorAll(SELECTORS.batchBodyUncheckedCheckboxInput);
                 if (!checkboxes.length) {
                     console.log('没有可选择的文件，关闭对话框');
                     // 查找并点击取消按钮
@@ -1132,25 +1221,33 @@
     async function handleSignaturePage() {
         try {
             console.log('开始签名页面处理流程');
-            setStatus('签名页面：开始处理');
+            setStatus('正在等待签章页面加载...');
 
             while (isRunning && !manualStopped) {
                 // 执行签名流程
-                setStatus('签名页面：执行签名操作');
+                setStatus('正在执行签名操作...');
                 let signedOk = false;
                 for (let attempt = 1; attempt <= 2; attempt++) { // 失败可重签一次
                     const ok = await signProcess();
                     if (ok) {
                         signedOk = true;
-                        setStatus('签名页面：签名成功');
+                        setStatus('当前文件签名成功，准备处理下一个...');
                         break;
                     }
                     console.log('签名失败，准备重试第', attempt, '次');
-                    setStatus('签名页面：签名失败，准备重试');
+                    setStatus('签名失败，正在重试...');
                 }
 
                 if (!signedOk) {
-                    console.log('签名重试后仍失败，进入下一个文件检测');
+                    console.log('签名重试后仍失败，回到列表状态检测');
+                    setStatus('签名失败，正在检测待签列表状态...');
+                    const ok = await runDetectionFlow();
+                    if (!ok) {
+                        notifyAttention('当前文件签名失败，且列表仍存在待签署文件。请人工检查页面状态或弹窗权限。');
+                        setStatus('签名失败，请检查浏览器是否拦截弹窗或刷新页面后重试');
+                        stopProcess(true);
+                    }
+                    return;
                 }
 
                 // 每个文件处理后（成功或跳过）统一等待 2s 再切换
@@ -1161,7 +1258,7 @@
                 }
 
                 // 切换到下一个文件（仅以签名流程返回成功为依据，不再依赖列表图标类）
-                setStatus('签名页面：寻找下一个待签署文件');
+                setStatus('正在切换下一个待签文件...');
                 const hasNextFile = await clickNextFile();
 
                 if (hasNextFile) {
@@ -1169,23 +1266,23 @@
                 }
 
                 console.log('所有文件已签名完成，处理完成弹窗');
-                setStatus('签名页面：所有文件签名完成');
+                setStatus('没有检测到待签文件，正在处理完成确认...');
                 // 处理完成弹窗
                 const finalConfirmButton = await waitForMessageBoxButtonByText(['确定', '确认'], 2000);
                 if (finalConfirmButton) {
                     console.log('点击最终确认按钮');
-                    setStatus('签名页面：点击最终确认按钮');
+                    setStatus('正在确认本批次签章完成...');
                     finalConfirmButton.click();
                 }
                 // 如果没有出现最终弹窗，说明可能有文件被跳过，启动检测流程
                 const finalBox = await waitForElement('.el-message-box', 2000, true);
                 if (!finalBox) {
                     console.log('未检测到最终完成弹窗，启动检测流程');
-                    setStatus('签名页面：启动检测流程');
+                    setStatus('正在复查待签文件列表...');
                     const ok = await runDetectionFlow();
                     if (!ok) {
                         notifyAttention('签章检测遍历完成，仍未出现完成确认弹窗，请人工检查可能被跳过的文件');
-                        setStatus('错误：检测流程未完成');
+                        setStatus('复查后仍有异常，请人工检查页面状态');
                         stopProcess(true);
                     }
                 }
@@ -1194,17 +1291,17 @@
             
         } catch (error) {
             console.error('签名页面处理出错:', error);
-            setStatus('错误：签名页面处理失败');
+            setStatus('签名页面处理失败，请刷新页面后重试');
         }
     }
 
     // 获取文件列表并点击第一个待签署的文件
     async function clickNextFile() {
         try {
-            const fileList = document.querySelectorAll('ul.tempList li.flex');
+            const fileList = document.querySelectorAll(SELECTORS.fileListItem);
             if (!fileList.length) {
                 console.log('未找到文件列表');
-                setStatus('错误：未找到文件列表');
+                setStatus('未找到文件列表，请刷新页面后重试');
                 return false;
             }
 
@@ -1213,31 +1310,31 @@
             let targetFileName = '';
             
             for (let file of fileList) {
-                const pendingStatus = file.querySelector('.status-box.status-pending');
+                const pendingStatus = file.querySelector(SELECTORS.pendingStatus);
                 if (pendingStatus) {
                     targetFile = file;
-                    targetFileName = file.querySelector('.tem-title')?.textContent?.trim() || '未知文件';
+                    targetFileName = file.querySelector(SELECTORS.fileTitle)?.textContent?.trim() || '未知文件';
                     break;
                 }
             }
 
             if (targetFile) {
                 console.log('找到第一个待签署文件:', targetFileName);
-                setStatus(`找到待签署文件：${targetFileName}`);
-                targetFile.querySelector('.tem-title')?.click();
+                setStatus(`正在处理待签文件：${targetFileName}`);
+                targetFile.querySelector(SELECTORS.fileTitle)?.click();
                 console.log('切换到待签署文件，等待3秒...');
-                setStatus('切换到待签署文件，等待加载');
+                setStatus('正在切换下一个待签文件，等待加载...');
                 // 延长等待时间，确保页面完全加载
                 await new Promise(resolve => setTimeout(resolve, 3000));
                 return true;
             }
 
             console.log('没有更多待签署的文件');
-            setStatus('没有更多待签署文件');
+            setStatus('没有检测到待签文件');
             return false;
         } catch (error) {
             console.error('切换文件时出错:', error);
-            setStatus('错误：切换文件失败');
+            setStatus('切换待签文件失败，请刷新页面后重试');
             return false;
         }
     }
@@ -1246,13 +1343,13 @@
     async function runDetectionFlow() {
         try {
             console.log('%c进入检测流程：优先处理待签署文件', 'color: purple; font-weight: bold');
-            setStatus('检测流程：开始处理');
-            const fileList = document.querySelectorAll('ul.tempList li.flex');
+            setStatus('正在复查待签文件列表...');
+            const fileList = document.querySelectorAll(SELECTORS.fileListItem);
             
             // 首先过滤出待签署的文件
             const pendingFiles = [];
             for (let file of fileList) {
-                if (file.querySelector('.status-box.status-pending')) {
+                if (file.querySelector(SELECTORS.pendingStatus)) {
                     pendingFiles.push(file);
                 }
             }
@@ -1260,36 +1357,35 @@
             // 先处理待签署文件
             if (pendingFiles.length > 0) {
                 console.log(`检测到 ${pendingFiles.length} 个待签署文件，优先处理`);
-                setStatus(`检测到 ${pendingFiles.length} 个待签署文件`);
+                setStatus(`检测到 ${pendingFiles.length} 个待签文件，继续处理...`);
                 for (let file of pendingFiles) {
-                    const titleEl = file.querySelector('.tem-title');
+                    const titleEl = file.querySelector(SELECTORS.fileTitle);
                     const name = titleEl?.textContent?.trim();
                     console.log('检测待签署文件:', name);
-                    setStatus(`检测文件：${name}`);
+                    setStatus(`正在复查文件：${name}`);
                     titleEl?.click();
                     await new Promise(r => setTimeout(r, 1500)); // 延长等待时间
 
-                    // 以画布为准：如果画布出现但签名模块不存在/不可见，则跳过；否则执行签名
-                    const canvas = await waitForElement('canvas.canvasstyle', 5000, true);
-                    if (canvas) {
-                        const sig = document.querySelector('div.carousel-i-New');
-                        if (!sig || !isElementVisible(sig)) {
-                            console.log('检测流程：画布存在但无签名模块，跳过');
-                            setStatus('检测流程：文件已签署，跳过');
-                            continue;
-                        }
-                    } else {
-                        console.log('检测流程：画布未出现，跳过');
-                        setStatus('检测流程：画布未出现，跳过');
-                        continue;
+                    // 文件是否待签以列表 pending 状态为准；控件缺失视为异常，不再推断为已签。
+                    const canvas = await waitForElement(SELECTORS.signatureCanvas, 5000, true);
+                    if (!canvas) {
+                        console.log('检测流程：待签文件画布未出现，判定为异常');
+                        setStatus('待签文件画布未出现，请刷新页面后重试');
+                        return false;
+                    }
+                    const sig = document.querySelector(SELECTORS.signatureModule);
+                    if (!sig || !isElementVisible(sig)) {
+                        console.log('检测流程：待签文件签名模块未出现，判定为异常');
+                        setStatus('待签文件签名模块未出现，请检查浏览器是否拦截弹窗');
+                        return false;
                     }
 
                     // 可签则执行签名流程（含失败重试一次）
-                    setStatus('检测流程：执行签名操作');
+                    setStatus('正在执行签名操作...');
                     let ok = await signProcess();
                     if (!ok) {
                         console.log('检测流程：首签失败，重试一次');
-                        setStatus('检测流程：签名失败，准备重试');
+                        setStatus('签名失败，正在重试...');
                         ok = await signProcess();
                     }
 
@@ -1299,7 +1395,7 @@
                     if (finalBox) {
                         const finalBtn = await waitForMessageBoxButtonByText(['确定', '确认'], 3000);
                         if (finalBtn) {
-                            setStatus('检测流程：点击完成确认按钮');
+                            setStatus('正在确认本批次签章完成...');
                             await performReliableClick(finalBtn);
                             const startClose = Date.now();
                             while (document.querySelector('.el-message-box')) {
@@ -1308,69 +1404,16 @@
                             }
                         }
                         console.log('检测流程：出现完成确认弹窗，结束检测');
-                        setStatus('检测流程：完成确认弹窗已处理');
+                        setStatus('本批次签章完成，继续检查下一批...');
                         return true;
                     }
                 }
             }
             
-            // 如果没有待签署文件，遍历所有文件进行检查
-            console.log('没有待签署文件，遍历所有文件进行检查');
-            setStatus('检测流程：遍历所有文件检查');
-            for (let i = 0; i < fileList.length; i++) {
-                const file = fileList[i];
-                const titleEl = file.querySelector('.tem-title');
-                const name = titleEl?.textContent?.trim();
-                console.log('检测文件:', name);
-                setStatus(`检测文件：${name}`);
-                titleEl?.click();
-                await new Promise(r => setTimeout(r, 1000)); // 延长等待时间
-
-                // 以画布为准：如果画布出现但签名模块不存在/不可见，则跳过；否则执行签名
-                const canvas = await waitForElement('canvas.canvasstyle', 5000, true);
-                if (canvas) {
-                    const sig = document.querySelector('div.carousel-i-New');
-                    if (!sig || !isElementVisible(sig)) {
-                        console.log('检测流程：画布存在但无签名模块，跳过');
-                        setStatus('检测流程：文件已签署，跳过');
-                        continue;
-                    }
-                } else {
-                    console.log('检测流程：画布未出现，跳过');
-                    setStatus('检测流程：画布未出现，跳过');
-                    continue;
-                }
-
-                // 可签则执行签名流程（含失败重试一次）
-                setStatus('检测流程：执行签名操作');
-                let ok = await signProcess();
-                if (!ok) {
-                    console.log('检测流程：首签失败，重试一次');
-                    setStatus('检测流程：签名失败，准备重试');
-                    ok = await signProcess();
-                }
-
-                // 每次签名后检查是否弹出完成确认弹窗（如出现则视为整批结束）
-                // 检测流程：若出现完成确认弹窗则点击并结束
-                const finalBox = await waitForElement('.el-message-box', 3000, true);
-                if (finalBox) {
-                    const finalBtn = await waitForMessageBoxButtonByText(['确定', '确认'], 3000);
-                    if (finalBtn) {
-                        setStatus('检测流程：点击完成确认按钮');
-                        await performReliableClick(finalBtn);
-                        const startClose = Date.now();
-                        while (document.querySelector('.el-message-box')) {
-                            if (Date.now() - startClose > 5000) break;
-                            await new Promise(r => setTimeout(r, 100));
-                        }
-                    }
-                    console.log('检测流程：出现完成确认弹窗，结束检测');
-                    setStatus('检测流程：完成确认弹窗已处理');
-                    return true;
-                }
-            }
-            console.log('检测流程：遍历完所有文件仍未出现完成确认弹窗');
-            return false;
+            // 列表中没有 pending 状态时，认为没有待签文件，不再通过画布/签名模块反推已签状态。
+            console.log('检测流程：列表中没有待签署文件');
+            setStatus('没有检测到待签文件');
+            return true;
         } catch (e) {
             console.error('检测流程出错:', e);
             return false;
@@ -1404,72 +1447,64 @@
     async function signProcess() {
         try {
             console.log('开始签署流程...');
-            setStatus('签署流程：开始处理');
+            setStatus('正在准备签署当前文件...');
             
-            // 以画布为准：先等待画布，再在 0.5s 后校验签名模块；若无签名模块，视为已签，跳过
+            // 签名页只负责执行当前待签文件；是否待签以列表状态为准。
             console.log('等待画布可见 (无限等待)...');
-            setStatus('签署流程：等待画布出现');
-            const canvasNow = await waitForElementNoTimeout('canvas.canvasstyle', true);
+            setStatus('正在等待签章页面加载...');
+            const canvasNow = await waitForElementNoTimeout(SELECTORS.signatureCanvas, true);
             if (!canvasNow) {
                 console.log('等待被中断（停止或手动停止）');
-                setStatus('签署流程：等待被中断');
+                setStatus('签章流程已停止');
                 return false;
             }
             await new Promise(r => setTimeout(r, 500));
             
-            // 移除 data-v 属性依赖
-            let signatureModuleNow = document.querySelector('div.carousel-i-New');
+            let signatureModuleNow = document.querySelector(SELECTORS.signatureModule);
             if (!signatureModuleNow || !isElementVisible(signatureModuleNow)) {
-                console.log('画布存在，但签名模块未出现，判定为已签状态，跳过当前文件');
-                setStatus('签署流程：文件已签署，跳过');
-                return true;
+                console.log('画布存在，但签名模块未出现，返回失败并交由列表状态判断');
+                setStatus('签名模块未出现，请检查浏览器是否拦截弹窗');
+                return false;
             }
             // 优先真实点击；如被拦截，再用事件模拟
-            setStatus('签署流程：执行签名操作');
+            setStatus('正在执行签名操作...');
             try { signatureModuleNow.click(); } catch (e) { try { signatureModuleNow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e2) {} }
             const posNow = calculateSignPosition(canvasNow);
             simulateClick(canvasNow, posNow.x, posNow.y);
 
             // 点击确认签署（签章成功的唯一依据：确认签署后出现确认弹窗）
             console.log('查找确认签署按钮...');
-            setStatus('签署流程：寻找确认签署按钮');
-            const confirmButton = await waitForClickableElementByText('button.el-button--primary', '确认签署', 10000);
+            setStatus('正在查找确认签署按钮...');
+            const confirmButton = await waitForClickableElementByText(SELECTORS.primaryButton, '确认签署', 10000);
             if (confirmButton) {
                 console.log('找到确认签署按钮，点击中...');
-                setStatus('签署流程：点击确认签署按钮');
+                setStatus('正在提交当前文件签名...');
                 confirmButton.click();
                 
                 // 处理确认弹窗
                 console.log('等待确认弹窗...');
-                setStatus('签署流程：等待确认弹窗');
+                setStatus('正在等待签名确认弹窗...');
                 const confirmDialog = await waitForMessageBoxButtonByText(['确定', '确认'], 10000);
                 if (confirmDialog) {
                     console.log('找到弹窗确认按钮，点击中...');
-                    setStatus('签署流程：点击弹窗确认按钮');
+                    setStatus('正在确认当前文件签名...');
                     confirmDialog.click();
                 } else {
                     console.log('未找到弹窗确认按钮，视为本次签名失败（需重试当前文件）');
-                    setStatus('签署流程：未找到弹窗确认按钮');
+                    setStatus('未找到确认弹窗按钮，请检查浏览器是否拦截弹窗');
                     return false;
                 }
             } else {
-                // 没有确认签署按钮但有画布，视为已签状态（直接返回成功）
-                const stillHasCanvas = !!document.querySelector('canvas.canvasstyle');
-                if (stillHasCanvas) {
-                    console.log('未找到确认签署按钮，但画布存在，推断为已签状态，返回成功');
-                    setStatus('签署流程：文件已签署，返回成功');
-                    return true;
-                }
-                console.log('未找到确认签署按钮且画布不存在，返回失败');
-                setStatus('签署流程：未找到确认签署按钮');
+                console.log('未找到确认签署按钮，返回失败并交由列表状态判断');
+                setStatus('未找到确认签署按钮，请刷新页面后重试');
                 return false;
             }
 
-            setStatus('签署流程：签名成功');
+            setStatus('当前文件签名成功');
             return true;
         } catch (error) {
             console.error('签署过程出错:', error);
-            setStatus('错误：签署过程失败');
+            setStatus('签署过程失败，请刷新页面后重试');
             return false;
         }
     }
@@ -1494,10 +1529,12 @@
     }
 
     function removeControlUi() {
+        const toolbar = document.querySelector('div[data-auto-sign-toolbar]');
         const button = document.querySelector('button[data-auto-sign-control]');
         const settingsButton = document.querySelector('button[data-auto-sign-settings]');
         const settingsPanel = document.querySelector('div[data-auto-sign-settings-panel]');
         const badge = document.querySelector('span[data-auto-sign-status]');
+        if (toolbar) toolbar.remove();
         if (button) button.remove();
         if (settingsButton) settingsButton.remove();
         if (settingsPanel) settingsPanel.remove();
@@ -1584,13 +1621,10 @@
     }
 
     // 更新运行状态的函数
-    function updateRunningState(running, syncGmRunning = true) {
+    function updateRunningState(running, syncGmRunning = true, stateOverride = null) {
         console.log('更新运行状态:', running);
-        if (syncGmRunning) {
-            try { GM_setValue && GM_setValue('autoSignRunning', running === true); } catch (e) {}
-        }
-        localStorage.setItem('autoSignRunning', running.toString());
-        sessionStorage.setItem('autoSignRunning', running.toString());
+        const targetState = stateOverride || (running ? AUTO_SIGN_STATES.RUNNING : AUTO_SIGN_STATES.IDLE);
+        setAutoSignState(targetState, syncGmRunning);
         
         // 更新按钮文本
         const button = document.querySelector('button[data-auto-sign-control]');
@@ -1613,7 +1647,7 @@
 
     // 修改startProcess函数
     function startProcess() {
-        if (manualStopped) {
+        if (manualStopped || isAutoSignManuallyStoppedState()) {
             console.log('检测到手动停止标记，禁止启动');
             return;
         }
@@ -1622,14 +1656,14 @@
             return;
         }
         
-        const wasAlreadyRunning = localStorage.getItem('autoSignRunning') === 'true' || sessionStorage.getItem('autoSignRunning') === 'true';
+        const wasAlreadyRunning = isAutoSignRunningState() || sessionStorage.getItem(AUTO_SIGN_STATE_KEY) === AUTO_SIGN_STATES.RUNNING;
         if (!wasAlreadyRunning) {
             resetBatchSubmitted();
         }
         const selectedPosition = getSignPositionMode();
         console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);
         console.log('启动处理流程');
-        try { GM_setValue && GM_setValue(MANUAL_STOP_KEY, false); } catch (e) {}
+        setAutoSignState(AUTO_SIGN_STATES.RUNNING);
         processStarted = true;
         isRunning = true;
         updateRunningState(true);
@@ -1672,13 +1706,11 @@
         setStatus('已停止');
         
         if (manual) {
-            manualStopped = true;
             resetBatchSubmitted();
-            try { GM_setValue && GM_setValue(MANUAL_STOP_KEY, true); } catch (e) {}
             console.log('已标记为手动停止，将不会自动重启');
         }
         
-        updateRunningState(false, !manual);
+        updateRunningState(false, true, manual ? AUTO_SIGN_STATES.STOPPED : AUTO_SIGN_STATES.IDLE);
 
         if (!manual) {
             // 恢复 1.1.1 的自动停止刷新行为，用页面重新加载重新进入下一轮流程。
@@ -1697,7 +1729,7 @@
             // 仅重试一次：打开对话框 → 勾选 → 校验 → 确定（最多 2 次，否则提醒人工介入）
             for (let attempt = 1; attempt <= 2 && isRunning && !manualStopped; attempt++) {
                 console.log(`%c开始处理批量签章页面（尝试 ${attempt}/2）`, 'color: blue; font-weight: bold');
-                const batchSignLink = await waitForElement('i.icon.font_family.icon-piliangchuli', 15000, true);
+                const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 15000, true);
                 if (!batchSignLink) {
                     console.log('%c未找到批量签章按钮，1s 后重试', 'color: red');
                     await new Promise(r => setTimeout(r, 1000));
@@ -1705,7 +1737,7 @@
                 }
                 // 打开弹窗
                 console.log('%c点击批量签章按钮', 'color: green');
-                setStatus('批量签章：打开批量签章弹窗');
+                setStatus('正在打开批量签章窗口...');
                 const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
                 await performReliableClick(linkElement || batchSignLink);
                 const dialog = await waitForDialogByHeaderText('批量签章', 15000);
@@ -1728,16 +1760,16 @@
                 const totalCount = getBatchTotalCount(dialog);
                 if (totalCount === 0) {
                     console.log('批量签章弹窗显示没有待签章文件，停止流程');
-                    setStatus('批量签章：没有待签章文件');
-                    const cancelBtn = dialog.querySelector('.el-dialog__footer .el-button--default') || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消') || (b.textContent || '').includes('关闭'));
+                    setStatus('没有检测到待签文件');
+                    const cancelBtn = dialog.querySelector(SELECTORS.dialogDefaultFooterButton) || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消') || (b.textContent || '').includes('关闭'));
                     if (cancelBtn) await performReliableClick(cancelBtn);
                     stopProcess(true);
                     return true;
                 }
 
                 console.log('等待复选框加载...');
-                setStatus('批量签章：加载列表与勾选...');
-                await waitForElement('.el-dialog__body .el-checkbox__input, .el-dialog__body .el-checkbox__original', 15000, true);
+                setStatus('正在勾选待签章文件...');
+                await waitForElement(SELECTORS.batchDialogBodyCheckbox, 15000, true);
 
                 // 勾选逻辑：表头全选 → 回退逐一勾选 → 滚动补齐
                 let okSelected = await selectAllCurrentPageInDialog();
@@ -1747,7 +1779,7 @@
                 }
                 if (!okSelected) {
                     // 滚动表体触发懒加载后再尝试一次
-                    const body = dialog.querySelector('.el-table__body-wrapper');
+                    const body = dialog.querySelector(SELECTORS.batchBodyWrapper);
                     if (body) {
                         body.scrollTop = 0;
                         await new Promise(r => setTimeout(r, 150));
@@ -1758,12 +1790,12 @@
                 }
 
                 // 校验本页全选
-                const bodyCheckboxes = dialog.querySelectorAll('.el-table__body-wrapper .el-checkbox__input');
+                const bodyCheckboxes = dialog.querySelectorAll(SELECTORS.batchBodyCheckboxInput);
                 const allCheckboxesChecked = Array.from(bodyCheckboxes).length > 0 && Array.from(bodyCheckboxes).every(cb => cb.classList.contains('is-checked'));
                 if (!allCheckboxesChecked) {
                     console.log('还有复选框未选中，准备重试弹窗');
                     // 关闭弹窗后重试
-                    const cancelBtn = dialog.querySelector('.el-dialog__footer .el-button--default') || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消'));
+                    const cancelBtn = dialog.querySelector(SELECTORS.dialogDefaultFooterButton) || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消'));
                     if (cancelBtn) await performReliableClick(cancelBtn);
                     await new Promise(r => setTimeout(r, 300));
                     continue;
@@ -1771,10 +1803,10 @@
 
                 // 确定
                 console.log('在对话框底部查找确定按钮...');
-                const confirmButton = dialog.querySelector('.el-dialog__footer .dialog-footer button.el-button--primary');
+                const confirmButton = dialog.querySelector(SELECTORS.dialogPrimaryFooterButton);
                 if (!confirmButton || /is-disabled/.test(confirmButton.className || '')) {
                     console.log('确定按钮不可用，重试弹窗');
-                    const cancelBtn = dialog.querySelector('.el-dialog__footer .el-button--default') || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消'));
+                    const cancelBtn = dialog.querySelector(SELECTORS.dialogDefaultFooterButton) || Array.from(dialog.querySelectorAll('.el-button')).find(b => (b.textContent || '').includes('取消'));
                     if (cancelBtn) await performReliableClick(cancelBtn);
                     await new Promise(r => setTimeout(r, 300));
                     continue;
@@ -1784,7 +1816,7 @@
                 await performReliableClick(confirmButton);
                 console.log('确定按钮点击成功');
                 markBatchSubmitted(totalCount, selectedCount);
-                setStatus('批量签章：已提交签名');
+                setStatus('正在提交本批次签章...');
                 return true;
             }
 
@@ -1827,34 +1859,25 @@
 
         // 监听 GM 值变化（跨子域同步，统一走首次入口逻辑）
         try {
-            GM_addValueChangeListener && GM_addValueChangeListener('autoSignRunning', (name, oldVal, newVal) => {
-                console.log('GM 运行状态变化:', newVal);
-                const shouldRun = !!newVal;
+            GM_addValueChangeListener && GM_addValueChangeListener(AUTO_SIGN_STATE_KEY, (name, oldVal, newVal) => {
+                const nextState = normalizeAutoSignState(newVal);
+                console.log('GM 主运行状态变化:', nextState);
+                const shouldRun = nextState === AUTO_SIGN_STATES.RUNNING;
                 if (shouldRun && !manualStopped) {
                     startProcess();
                 } else if (isRunning || processStarted) {
                     stopProcess(false);
                 }
             });
-            GM_addValueChangeListener && GM_addValueChangeListener(MANUAL_STOP_KEY, (name, oldVal, newVal) => {
-                console.log('GM 手动停止状态变化:', newVal);
-                if (newVal) {
-                    stopProcess(true);
-                }
-            });
         } catch (e) {}
 
         // 检查是否需要自动启动
-        let shouldRun = false;
-        let shouldManualStop = false;
-        try { shouldManualStop = !!(GM_getValue && GM_getValue(MANUAL_STOP_KEY)); } catch (e) {}
-        try { shouldRun = !!(GM_getValue && GM_getValue('autoSignRunning')); } catch (e) {}
-        if (!shouldRun) {
-            shouldRun = localStorage.getItem('autoSignRunning') === 'true';
-        }
+        const initialState = getAutoSignState();
+        const shouldRun = initialState === AUTO_SIGN_STATES.RUNNING;
+        const shouldManualStop = initialState === AUTO_SIGN_STATES.STOPPED;
         if (shouldManualStop) {
             manualStopped = true;
-            updateRunningState(false, false);
+            updateRunningState(false, false, AUTO_SIGN_STATES.STOPPED);
         }
         if (shouldRun && !manualStopped && !shouldManualStop) {
             console.log('检测到自动运行状态，开始执行...');
