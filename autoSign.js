@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.8-beta
+// @version      1.1.8
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -16,11 +16,13 @@
     'use strict';
 
     const SIGN_POSITION_KEY = 'autoSignPosition';
+    const QUERY_INTERVAL_KEY = 'autoSignQueryIntervalSeconds';
     const AUTO_SIGN_STATE_KEY = 'autoSignState';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
-    const BATCH_LAST_TOTAL_KEY = 'autoSignLastBatchTotal';
-    const BATCH_LAST_SELECTED_KEY = 'autoSignLastBatchSelected';
+    const AUTO_SIGN_LOG_KEY = 'autoSignRecentLogs';
+    const NEXT_FILE_READY_TIMEOUT = 120000;
+    const ENTRY_FLOW_READY_TIMEOUT = 120000;
     const AUTO_SIGN_STATES = Object.freeze({
         IDLE: 'idle',
         RUNNING: 'running',
@@ -118,10 +120,15 @@
             
             if (currentRunning) {
                 console.log('手动停止脚本运行');
+                addAutoSignEvent('manual_stop_click', { running: currentRunning }, 'warn');
                 stopProcess(true); // 传入true表示手动停止
             } else {
                 console.log('启动脚本运行');
+                addAutoSignEvent('manual_start_click', { running: currentRunning }, 'info');
                 manualStopped = false; // 重置手动停止标记
+                setAutoSignState(AUTO_SIGN_STATES.IDLE);
+                resetBatchSubmitted();
+                resetSignEntryClickedFlags();
                 startProcess();
             }
         };
@@ -132,18 +139,33 @@
         if (!statusBadge) {
             statusBadge = document.createElement('span');
             statusBadge.setAttribute('data-auto-sign-status', 'true');
+            statusBadge.setAttribute('data-auto-sign-status-type', 'idle');
+            statusBadge.style.display = 'inline-flex';
+            statusBadge.style.alignItems = 'center';
+            statusBadge.style.gap = '6px';
             statusBadge.style.padding = '6px 10px';
-            statusBadge.style.backgroundColor = '#303133';
-            statusBadge.style.color = '#fff';
-            statusBadge.style.borderRadius = '4px';
+            statusBadge.style.borderRadius = '999px';
             statusBadge.style.fontSize = '12px';
-            statusBadge.style.opacity = '0.9';
+            statusBadge.style.fontWeight = '600';
             statusBadge.style.whiteSpace = 'nowrap';
-            statusBadge.style.maxWidth = '360px';
+            statusBadge.style.maxWidth = '280px';
             statusBadge.style.overflow = 'hidden';
             statusBadge.style.textOverflow = 'ellipsis';
-            statusBadge.innerText = '就绪';
+            const statusDot = document.createElement('span');
+            statusDot.setAttribute('data-auto-sign-status-dot', 'true');
+            statusDot.style.width = '7px';
+            statusDot.style.height = '7px';
+            statusDot.style.borderRadius = '999px';
+            statusDot.style.flex = '0 0 auto';
+            const statusText = document.createElement('span');
+            statusText.setAttribute('data-auto-sign-status-text', 'true');
+            statusText.style.overflow = 'hidden';
+            statusText.style.textOverflow = 'ellipsis';
+            statusText.innerText = '就绪';
+            statusBadge.appendChild(statusDot);
+            statusBadge.appendChild(statusText);
             toolbar.appendChild(statusBadge);
+            setStatus('就绪', 'idle', false);
         }
         return button;
     }
@@ -170,6 +192,31 @@
         }
         try { GM_setValue && GM_setValue(SIGN_POSITION_KEY, mode); } catch (e) {}
         localStorage.setItem(SIGN_POSITION_KEY, mode);
+    }
+
+    function getQueryIntervalSeconds() {
+        let seconds = Number(localStorage.getItem(QUERY_INTERVAL_KEY));
+        try {
+            const gmValue = GM_getValue && GM_getValue(QUERY_INTERVAL_KEY);
+            if (gmValue !== undefined && gmValue !== null && gmValue !== '') {
+                seconds = Number(gmValue);
+            }
+        } catch (e) {}
+        if (!Number.isFinite(seconds)) {
+            seconds = 3;
+        }
+        return Math.min(Math.max(Math.round(seconds), 3), 15);
+    }
+
+    function setQueryIntervalSeconds(seconds) {
+        const normalizedSeconds = Math.min(Math.max(Math.round(Number(seconds) || 3), 3), 15);
+        try { GM_setValue && GM_setValue(QUERY_INTERVAL_KEY, normalizedSeconds); } catch (e) {}
+        localStorage.setItem(QUERY_INTERVAL_KEY, String(normalizedSeconds));
+        return normalizedSeconds;
+    }
+
+    function getQueryIntervalMs() {
+        return getQueryIntervalSeconds() * 1000;
     }
 
     function normalizeAutoSignState(state) {
@@ -243,10 +290,6 @@
             this.style.backgroundColor = isAutoSignRunningState() ? '#A0CFFF' : '#67C23A';
         };
         settingsButton.onclick = function() {
-            if (isAutoSignRunningState()) {
-                setStatus('运行中：停止后才能修改签字位置');
-                return;
-            }
             toggleSettingsPanel();
         };
 
@@ -255,10 +298,75 @@
         updateSettingsButtonState(isAutoSignRunningState());
     }
 
+    function applySettingButtonStyle(button, active = false) {
+        button.style.height = '30px';
+        button.style.border = active ? '1px solid #409EFF' : '1px solid #dcdfe6';
+        button.style.borderRadius = '6px';
+        button.style.backgroundColor = active ? '#ecf5ff' : '#fff';
+        button.style.color = active ? '#1677d2' : '#303133';
+        button.style.fontSize = '12px';
+        button.style.fontWeight = active ? '600' : '500';
+        button.style.cursor = isAutoSignRunningState() ? 'not-allowed' : 'pointer';
+    }
+
+    function updateSignPositionButtons() {
+        const currentMode = getSignPositionMode();
+        document.querySelectorAll('button[data-auto-sign-position-option]').forEach(button => {
+            applySettingButtonStyle(button, button.dataset.value === currentMode);
+            button.disabled = isAutoSignRunningState();
+            button.style.opacity = button.disabled ? '0.55' : '1';
+        });
+    }
+
+    function setSettingsDisabledState(running) {
+        const disabledHint = document.querySelector('div[data-auto-sign-settings-running-hint]');
+        const queryIntervalDecrease = document.querySelector('button[data-auto-sign-query-interval-decrease]');
+        const queryIntervalIncrease = document.querySelector('button[data-auto-sign-query-interval-increase]');
+        updateSignPositionButtons();
+        if (queryIntervalDecrease) {
+            queryIntervalDecrease.disabled = running === true;
+            queryIntervalDecrease.style.opacity = running ? '0.55' : '1';
+            queryIntervalDecrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (queryIntervalIncrease) {
+            queryIntervalIncrease.disabled = running === true;
+            queryIntervalIncrease.style.opacity = running ? '0.55' : '1';
+            queryIntervalIncrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (disabledHint) {
+            disabledHint.style.display = running ? 'block' : 'none';
+        }
+    }
+
+    function closeSettingsPanel() {
+        const panel = document.querySelector('div[data-auto-sign-settings-panel]');
+        if (panel) {
+            panel.remove();
+        }
+        document.removeEventListener('mousedown', handleSettingsOutsideClick, true);
+        document.removeEventListener('keydown', handleSettingsEscapeKey, true);
+    }
+
+    function handleSettingsOutsideClick(event) {
+        const panel = document.querySelector('div[data-auto-sign-settings-panel]');
+        const settingsButton = document.querySelector('button[data-auto-sign-settings]');
+        if (!panel) return;
+        if (panel.contains(event.target) || settingsButton?.contains(event.target)) {
+            return;
+        }
+        closeSettingsPanel();
+    }
+
+    function handleSettingsEscapeKey(event) {
+        if (event.key === 'Escape') {
+            closeSettingsPanel();
+        }
+    }
+
     function toggleSettingsPanel() {
         let panel = document.querySelector('div[data-auto-sign-settings-panel]');
         if (panel) {
-            panel.remove();
+            closeSettingsPanel();
             return;
         }
 
@@ -268,49 +376,197 @@
         panel.style.top = '48px';
         panel.style.left = '10px';
         panel.style.zIndex = '9999';
-        panel.style.padding = '10px';
+        panel.style.width = '280px';
+        panel.style.padding = '14px';
         panel.style.backgroundColor = '#fff';
-        panel.style.border = '1px solid #dcdfe6';
-        panel.style.borderRadius = '4px';
-        panel.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+        panel.style.border = '1px solid #e4e7ed';
+        panel.style.borderRadius = '8px';
+        panel.style.boxShadow = '0 12px 28px rgba(31,45,61,0.18)';
         panel.style.fontSize = '13px';
         panel.style.color = '#303133';
+        panel.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+        const positionSection = document.createElement('div');
+        positionSection.style.padding = '10px';
+        positionSection.style.border = '1px solid #ebeef5';
+        positionSection.style.borderRadius = '8px';
+        positionSection.style.backgroundColor = '#fafafa';
 
         const label = document.createElement('div');
-        label.innerText = '签字位置';
-        label.style.marginBottom = '6px';
-        label.style.fontWeight = 'bold';
+        label.innerText = '签章位置';
+        label.style.marginBottom = '8px';
+        label.style.fontWeight = '700';
+        label.style.color = '#303133';
 
-        const select = document.createElement('select');
-        select.setAttribute('data-auto-sign-position-select', 'true');
-        select.style.width = '120px';
-        select.style.padding = '4px 6px';
-        select.style.border = '1px solid #dcdfe6';
-        select.style.borderRadius = '4px';
-        select.style.backgroundColor = '#fff';
-        select.disabled = isAutoSignRunningState();
+        const positionGrid = document.createElement('div');
+        positionGrid.setAttribute('data-auto-sign-position-grid', 'true');
+        positionGrid.style.display = 'grid';
+        positionGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
+        positionGrid.style.gap = '6px';
 
-        const currentMode = getSignPositionMode();
         SIGN_POSITION_OPTIONS.forEach(option => {
-            const item = document.createElement('option');
-            item.value = option.value;
+            const item = document.createElement('button');
+            item.setAttribute('data-auto-sign-position-option', 'true');
+            item.dataset.value = option.value;
             item.innerText = option.label;
-            item.selected = option.value === currentMode;
-            select.appendChild(item);
+            item.onclick = function() {
+                if (isAutoSignRunningState()) {
+                    setStatus('运行中：停止后才能修改签字位置');
+                    return;
+                }
+                setSignPositionMode(option.value);
+                updateSignPositionButtons();
+                setStatus(`已选择签字位置：${option.label}`);
+            };
+            positionGrid.appendChild(item);
         });
-        select.onchange = function() {
+
+        positionSection.appendChild(label);
+        positionSection.appendChild(positionGrid);
+
+        const querySection = document.createElement('div');
+        querySection.style.marginTop = '10px';
+        querySection.style.padding = '10px';
+        querySection.style.border = '1px solid #ebeef5';
+        querySection.style.borderRadius = '8px';
+        querySection.style.backgroundColor = '#fff';
+        
+        const queryLabel = document.createElement('div');
+        queryLabel.innerText = '查询间隔';
+        queryLabel.style.marginBottom = '8px';
+        queryLabel.style.fontWeight = '700';
+        queryLabel.style.color = '#303133';
+
+        const queryIntervalRow = document.createElement('div');
+        queryIntervalRow.style.display = 'flex';
+        queryIntervalRow.style.alignItems = 'center';
+        queryIntervalRow.style.gap = '8px';
+
+        const queryIntervalDecrease = document.createElement('button');
+        queryIntervalDecrease.setAttribute('data-auto-sign-query-interval-decrease', 'true');
+        queryIntervalDecrease.innerText = '-';
+        queryIntervalDecrease.style.width = '32px';
+        queryIntervalDecrease.style.height = '30px';
+        queryIntervalDecrease.style.border = '1px solid #dcdfe6';
+        queryIntervalDecrease.style.borderRadius = '6px';
+        queryIntervalDecrease.style.backgroundColor = '#fff';
+        queryIntervalDecrease.style.cursor = 'pointer';
+        queryIntervalDecrease.style.fontWeight = '700';
+
+        const queryIntervalValue = document.createElement('span');
+        queryIntervalValue.setAttribute('data-auto-sign-query-interval-value', 'true');
+        queryIntervalValue.style.display = 'inline-block';
+        queryIntervalValue.style.minWidth = '64px';
+        queryIntervalValue.style.height = '30px';
+        queryIntervalValue.style.lineHeight = '30px';
+        queryIntervalValue.style.textAlign = 'center';
+        queryIntervalValue.style.border = '1px solid #dcdfe6';
+        queryIntervalValue.style.borderRadius = '6px';
+        queryIntervalValue.style.backgroundColor = '#f5f7fa';
+        queryIntervalValue.style.fontWeight = '700';
+        queryIntervalValue.style.color = '#1f2d3d';
+
+        const queryIntervalIncrease = document.createElement('button');
+        queryIntervalIncrease.setAttribute('data-auto-sign-query-interval-increase', 'true');
+        queryIntervalIncrease.innerText = '+';
+        queryIntervalIncrease.style.width = '32px';
+        queryIntervalIncrease.style.height = '30px';
+        queryIntervalIncrease.style.border = '1px solid #dcdfe6';
+        queryIntervalIncrease.style.borderRadius = '6px';
+        queryIntervalIncrease.style.backgroundColor = '#fff';
+        queryIntervalIncrease.style.cursor = 'pointer';
+        queryIntervalIncrease.style.fontWeight = '700';
+
+        const updateQueryIntervalValue = () => {
+            queryIntervalValue.innerText = `${getQueryIntervalSeconds()} 秒`;
+        };
+        const changeQueryInterval = step => {
             if (isAutoSignRunningState()) {
-                this.value = getSignPositionMode();
-                setStatus('运行中：停止后才能修改签字位置');
+                setStatus('运行中：停止后才能修改查询间隔');
                 return;
             }
-            setSignPositionMode(this.value);
-            setStatus(`已选择签字位置：${getSignPositionLabel(this.value)}`);
+            const seconds = setQueryIntervalSeconds(getQueryIntervalSeconds() + step);
+            queryIntervalValue.innerText = `${seconds} 秒`;
+            setStatus(`已设置查询间隔：${seconds} 秒`);
         };
+        queryIntervalDecrease.onclick = () => changeQueryInterval(-1);
+        queryIntervalIncrease.onclick = () => changeQueryInterval(1);
+        updateQueryIntervalValue();
 
-        panel.appendChild(label);
-        panel.appendChild(select);
+        queryIntervalRow.appendChild(queryIntervalDecrease);
+        queryIntervalRow.appendChild(queryIntervalValue);
+        queryIntervalRow.appendChild(queryIntervalIncrease);
+
+        const queryHelp = document.createElement('div');
+        queryHelp.innerText = '后续批次点“查询”的间隔；网速慢可调大。';
+        queryHelp.style.marginTop = '8px';
+        queryHelp.style.fontSize = '12px';
+        queryHelp.style.color = '#606266';
+        queryHelp.style.lineHeight = '1.4';
+
+        querySection.appendChild(queryLabel);
+        querySection.appendChild(queryIntervalRow);
+        querySection.appendChild(queryHelp);
+
+        const disabledHint = document.createElement('div');
+        disabledHint.setAttribute('data-auto-sign-settings-running-hint', 'true');
+        disabledHint.innerText = '运行中请先停止再修改设置';
+        disabledHint.style.marginTop = '10px';
+        disabledHint.style.padding = '8px 10px';
+        disabledHint.style.borderRadius = '6px';
+        disabledHint.style.backgroundColor = '#fff7e6';
+        disabledHint.style.color = '#ad6800';
+        disabledHint.style.fontSize = '12px';
+        disabledHint.style.lineHeight = '1.4';
+
+        const feedbackSection = document.createElement('div');
+        feedbackSection.style.marginTop = '10px';
+        feedbackSection.style.padding = '10px';
+        feedbackSection.style.border = '1px solid #ebeef5';
+        feedbackSection.style.borderRadius = '8px';
+        feedbackSection.style.backgroundColor = '#fff';
+
+        const feedbackLabel = document.createElement('div');
+        feedbackLabel.innerText = '问题反馈';
+        feedbackLabel.style.marginBottom = '8px';
+        feedbackLabel.style.fontWeight = '700';
+        feedbackLabel.style.color = '#303133';
+
+        const exportLogButton = document.createElement('button');
+        exportLogButton.setAttribute('data-auto-sign-export-log', 'true');
+        exportLogButton.innerText = '导出日志';
+        exportLogButton.style.width = '100%';
+        exportLogButton.style.height = '32px';
+        exportLogButton.style.border = '1px solid #409EFF';
+        exportLogButton.style.borderRadius = '6px';
+        exportLogButton.style.backgroundColor = '#ecf5ff';
+        exportLogButton.style.color = '#1677d2';
+        exportLogButton.style.fontWeight = '700';
+        exportLogButton.style.cursor = 'pointer';
+        exportLogButton.onclick = exportAutoSignLogs;
+
+        const feedbackHelp = document.createElement('div');
+        feedbackHelp.innerText = '遇到问题时导出给维护人员排查。';
+        feedbackHelp.style.marginTop = '8px';
+        feedbackHelp.style.fontSize = '12px';
+        feedbackHelp.style.color = '#606266';
+        feedbackHelp.style.lineHeight = '1.4';
+
+        feedbackSection.appendChild(feedbackLabel);
+        feedbackSection.appendChild(exportLogButton);
+        feedbackSection.appendChild(feedbackHelp);
+
+        panel.appendChild(positionSection);
+        panel.appendChild(querySection);
+        panel.appendChild(feedbackSection);
+        panel.appendChild(disabledHint);
         document.body.appendChild(panel);
+        updateSignPositionButtons();
+        setSettingsDisabledState(isAutoSignRunningState());
+        setTimeout(() => {
+            document.addEventListener('mousedown', handleSettingsOutsideClick, true);
+            document.addEventListener('keydown', handleSettingsEscapeKey, true);
+        }, 0);
     }
 
     function updateSettingsButtonState(running) {
@@ -319,20 +575,149 @@
             settingsButton.style.cursor = running ? 'not-allowed' : 'pointer';
             settingsButton.style.backgroundColor = running ? '#A0CFFF' : '#67C23A';
         }
-        const panel = document.querySelector('div[data-auto-sign-settings-panel]');
-        const select = document.querySelector('select[data-auto-sign-position-select]');
-        if (select) {
-            select.disabled = running === true;
-        }
-        if (running && panel) {
-            panel.remove();
+        setSettingsDisabledState(running);
+    }
+
+    function addAutoSignLog(message, level = 'info') {
+        try {
+            const logs = JSON.parse(sessionStorage.getItem(AUTO_SIGN_LOG_KEY) || '[]');
+            logs.push({
+                time: new Date().toLocaleString(),
+                level,
+                message: String(message || '')
+            });
+            sessionStorage.setItem(AUTO_SIGN_LOG_KEY, JSON.stringify(logs.slice(-300)));
+        } catch (e) {}
+    }
+
+    function getPageTypeForLog() {
+        const currentUrl = window.location.href || '';
+        if (currentUrl.includes('todoList')) return 'todoList';
+        if (currentUrl.includes('librarySignature')) return 'librarySignature';
+        if (currentUrl.includes('pageseal/signature')) return 'signature';
+        return 'unknown';
+    }
+
+    function getSafeLogUrl() {
+        const logUrlConfig = { redactedParams: ['ut', 'token', 'access_token', 'ticket'] };
+        return String(window.location.href || '').replace(
+            new RegExp(`([?&](?:${logUrlConfig.redactedParams.join('|')})=)[^&#]+`, 'gi'),
+            '$1[已隐藏]'
+        );
+    }
+
+    function getSafeLogDetail(detail) {
+        try {
+            return JSON.parse(JSON.stringify(detail || {}));
+        } catch (e) {
+            return { value: String(detail || '') };
         }
     }
 
-    function setStatus(text) {
+    function addAutoSignEvent(event, detail = {}, level = 'info') {
+        try {
+            const logs = JSON.parse(sessionStorage.getItem(AUTO_SIGN_LOG_KEY) || '[]');
+            logs.push({
+                time: new Date().toLocaleString(),
+                level,
+                event: String(event || 'unknown_event'),
+                detail: getSafeLogDetail(detail),
+                context: {
+                    pageType: getPageTypeForLog(),
+                    url: getSafeLogUrl(),
+                    state: getAutoSignState(),
+                    isRunning,
+                    processStarted,
+                    manualStopped,
+                    batchSubmitted: sessionStorage.getItem(BATCH_SUBMITTED_KEY) === 'true',
+                    queryIntervalSeconds: getQueryIntervalSeconds()
+                }
+            });
+            sessionStorage.setItem(AUTO_SIGN_LOG_KEY, JSON.stringify(logs.slice(-300)));
+        } catch (e) {}
+    }
+
+    function formatAutoSignLogItem(item) {
+        if (!item) return '';
+        if (item.event) {
+            const detailText = item.detail && Object.keys(item.detail).length ? ` detail=${JSON.stringify(item.detail)}` : '';
+            const contextText = item.context ? ` context=${JSON.stringify(item.context)}` : '';
+            return `[${item.time}] [${item.level}] ${item.event}${detailText}${contextText}`;
+        }
+        return `[${item.time}] [${item.level}] ${item.message}`;
+    }
+
+    function getStatusStyle(type) {
+        const styles = {
+            idle: { background: '#f5f7fa', border: '#dcdfe6', color: '#606266', dot: '#909399' },
+            running: { background: '#ecf5ff', border: '#b3d8ff', color: '#1677d2', dot: '#409EFF' },
+            waiting: { background: '#fff7e6', border: '#ffd591', color: '#ad6800', dot: '#faad14' },
+            success: { background: '#f0f9eb', border: '#b7eb8f', color: '#237804', dot: '#52c41a' },
+            error: { background: '#fff1f0', border: '#ffa39e', color: '#a8071a', dot: '#f5222d' }
+        };
+        return styles[type] || styles.running;
+    }
+
+    function exportAutoSignLogs() {
+        try {
+            const logs = JSON.parse(sessionStorage.getItem(AUTO_SIGN_LOG_KEY) || '[]');
+            const lines = [
+                'Autosign 问题日志',
+                `导出时间：${new Date().toLocaleString()}`,
+                '脚本版本：1.1.8',
+                `当前页面：${getSafeLogUrl()}`,
+                `页面类型：${getPageTypeForLog()}`,
+                `浏览器：${navigator.userAgent}`,
+                `运行状态：${getAutoSignState()}`,
+                `签章位置：${getSignPositionLabel(getSignPositionMode())}`,
+                `查询间隔：${getQueryIntervalSeconds()} 秒`,
+                `批次已提交标记：${hasSubmittedBatchOnce() ? '是' : '否'}`,
+                '',
+                '最近日志：',
+                ...(logs.length ? logs.filter(item => !item.event).map(formatAutoSignLogItem) : ['暂无日志']),
+                '',
+                '最近事件：',
+                ...(logs.some(item => item.event) ? logs.filter(item => item.event).map(formatAutoSignLogItem) : ['暂无事件'])
+            ];
+            const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+            link.href = url;
+            link.download = `autosign-log-${stamp}.txt`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            setStatus('日志已导出', 'success');
+        } catch (e) {
+            console.error('导出日志失败:', e);
+            setStatus('日志导出失败', 'error');
+        }
+    }
+
+    function setStatus(text, type = 'running', shouldLog = true) {
         try {
             const badge = document.querySelector('span[data-auto-sign-status]') || statusBadge;
-            if (badge) badge.innerText = text || '';
+            const normalizedText = text || '';
+            if (badge) {
+                const style = getStatusStyle(type);
+                const dot = badge.querySelector('span[data-auto-sign-status-dot]');
+                const textEl = badge.querySelector('span[data-auto-sign-status-text]');
+                badge.setAttribute('data-auto-sign-status-type', type);
+                badge.style.backgroundColor = style.background;
+                badge.style.border = `1px solid ${style.border}`;
+                badge.style.color = style.color;
+                if (dot) dot.style.backgroundColor = style.dot;
+                if (textEl) {
+                    textEl.innerText = normalizedText;
+                } else {
+                    badge.innerText = normalizedText;
+                }
+            }
+            if (shouldLog) {
+                addAutoSignLog(normalizedText, type === 'error' ? 'error' : 'status');
+            }
         } catch (e) {}
     }
 
@@ -680,6 +1065,45 @@
             .length;
     }
 
+    async function waitForBatchTotalReady(dialog, timeout = 15000, zeroStableMs = 2000) {
+        const start = Date.now();
+        let zeroSince = null;
+
+        while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return null;
+
+            await waitForLoadingGone(3000);
+            const totalCount = getBatchTotalCount(dialog);
+            const rowCount = getVisibleBatchRowCount(dialog);
+
+            if (typeof totalCount === 'number' && totalCount > 0) {
+                addAutoSignEvent('batch_total_ready', { totalCount, rowCount }, 'info');
+                return totalCount;
+            }
+            if (rowCount > 0) {
+                addAutoSignEvent('batch_total_ready_by_rows', { totalCount, rowCount }, 'info');
+                return typeof totalCount === 'number' && totalCount > 0 ? totalCount : rowCount;
+            }
+            if (totalCount === 0) {
+                if (zeroSince === null) {
+                    zeroSince = Date.now();
+                    setStatus('正在等待待签章列表加载完成...');
+                    addAutoSignEvent('batch_total_zero_loading', { totalCount, rowCount }, 'info');
+                }
+                if (Date.now() - zeroSince >= zeroStableMs) {
+                    addAutoSignEvent('batch_total_zero_stable', { totalCount, rowCount, zeroStableMs }, 'warn');
+                    return 0;
+                }
+            } else {
+                zeroSince = null;
+            }
+
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        return getBatchTotalCount(dialog);
+    }
+
     function findBatchQueryButton(scope) {
         const roots = [scope, document].filter(Boolean);
         for (const root of roots) {
@@ -697,35 +1121,19 @@
         return sessionStorage.getItem(BATCH_SUBMITTED_KEY) === 'true';
     }
 
-    function markBatchSubmitted(totalCount, selectedCount) {
+    function markBatchSubmitted(detail = {}) {
         sessionStorage.setItem(BATCH_SUBMITTED_KEY, 'true');
-        if (typeof totalCount === 'number') {
-            sessionStorage.setItem(BATCH_LAST_TOTAL_KEY, String(totalCount));
-        }
-        if (typeof selectedCount === 'number') {
-            sessionStorage.setItem(BATCH_LAST_SELECTED_KEY, String(selectedCount));
-        }
+        addAutoSignEvent('batch_submit', detail, 'info');
     }
 
     function resetBatchSubmitted() {
         sessionStorage.removeItem(BATCH_SUBMITTED_KEY);
-        sessionStorage.removeItem(BATCH_LAST_TOTAL_KEY);
-        sessionStorage.removeItem(BATCH_LAST_SELECTED_KEY);
     }
 
-    function getExpectedStableMaxCount() {
-        const lastTotal = Number(sessionStorage.getItem(BATCH_LAST_TOTAL_KEY));
-        const lastSelected = Number(sessionStorage.getItem(BATCH_LAST_SELECTED_KEY));
-        if (!Number.isFinite(lastTotal) || !Number.isFinite(lastSelected) || lastSelected <= 0) {
-            return null;
-        }
-        return Math.max(lastTotal - lastSelected, 0);
-    }
-
-    async function waitForBatchListStable(dialog, interval = 2000, timeout = 60000) {
+    async function waitForBatchListReadyByTrend(dialog, interval = getQueryIntervalMs(), timeout = 60000) {
         const start = Date.now();
-        let lastCount = null;
-        const expectedStableMax = getExpectedStableMaxCount();
+        let previousCount = null;
+        let nonDecreasingCount = 0;
 
         while (Date.now() - start < timeout) {
             if (!isRunning || manualStopped) return false;
@@ -738,29 +1146,54 @@
                 console.log('未找到查询按钮，使用当前列表数量进行稳定性判断');
             }
 
-            await waitForLoadingGone(15000);
-            await new Promise(r => setTimeout(r, 300));
-
-            const currentCount = getBatchTotalCount(dialog);
-            const comparableCount = currentCount === null ? getVisibleBatchRowCount(dialog) : currentCount;
-            console.log('当前待签章数量:', comparableCount);
-            setStatus(`正在刷新待签章列表，当前待签 ${comparableCount} 条`);
-
-            const reachedExpectedDrop = expectedStableMax === null || comparableCount <= expectedStableMax;
-            if (!reachedExpectedDrop) {
-                console.log('待签章数量尚未降到上一轮提交后的预期范围:', comparableCount, '>', expectedStableMax);
+            const currentCount = await waitForBatchTotalReady(dialog);
+            if (currentCount === null) {
+                return false;
             }
 
-            if (lastCount !== null && comparableCount === lastCount && reachedExpectedDrop) {
-                console.log('待签章数量已稳定:', comparableCount);
-                return true;
+            console.log('当前待签章数量:', currentCount);
+            setStatus(`正在刷新待签章列表，当前待签 ${currentCount} 条`);
+            addAutoSignEvent('batch_trend_count', {
+                currentCount,
+                previousCount,
+                nonDecreasingCount,
+                intervalMs: interval
+            }, 'info');
+
+            if (previousCount !== null) {
+                if (currentCount < previousCount) {
+                    console.log('待签章数量仍在减少，继续查询:', currentCount, '<', previousCount);
+                    addAutoSignEvent('batch_trend_decreasing', {
+                        currentCount,
+                        previousCount,
+                        intervalMs: interval
+                    }, 'info');
+                    previousCount = currentCount;
+                    nonDecreasingCount = 0;
+                    await new Promise(r => setTimeout(r, interval));
+                    continue;
+                }
+                if (currentCount >= previousCount) {
+                    nonDecreasingCount += 1;
+                    console.log('待签章数量未下降:', currentCount, '>=', previousCount, `(${nonDecreasingCount}/2)`);
+                    if (nonDecreasingCount >= 2) {
+                        console.log('待签章数量连续两次未下降，可以继续:', currentCount);
+                        addAutoSignEvent('batch_trend_ready', {
+                            currentCount,
+                            previousCount,
+                            nonDecreasingCount,
+                            intervalMs: interval
+                        }, 'info');
+                        return true;
+                    }
+                }
             }
 
-            lastCount = comparableCount;
+            previousCount = currentCount;
             await new Promise(r => setTimeout(r, interval));
         }
 
-        notifyAttention('待签章列表长时间未稳定，请人工检查列表刷新状态。');
+        notifyAttention('待签章列表长时间仍在减少，请人工检查列表刷新状态。');
         return false;
     }
 
@@ -937,6 +1370,47 @@
         return null;
     }
 
+    function resetSignEntryClickedFlags() {
+        try {
+            document.querySelectorAll('[data-auto-sign-entry-clicked]').forEach(element => {
+                delete element.dataset.autoSignEntryClicked;
+            });
+        } catch (e) {}
+    }
+
+    async function waitForEntryFlowReady(timeout = ENTRY_FLOW_READY_TIMEOUT) {
+        const start = Date.now();
+        addAutoSignEvent('entry_flow_wait_start', { timeout }, 'info');
+
+        while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return false;
+
+            await waitForLoadingGone(3000);
+            const currentUrl = window.location.href || '';
+            if (currentUrl.includes('librarySignature')) {
+                addAutoSignEvent('entry_flow_ready', {
+                    reason: 'library_signature_url',
+                    elapsedMs: Date.now() - start
+                }, 'info');
+                return true;
+            }
+
+            const processButton = await waitForStableProcessButton(800);
+            if (processButton) {
+                addAutoSignEvent('entry_flow_ready', {
+                    reason: 'process_button_ready',
+                    elapsedMs: Date.now() - start
+                }, 'info');
+                return true;
+            }
+
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        addAutoSignEvent('entry_flow_timeout', { timeout }, 'error');
+        return false;
+    }
+
     // 初始化流程
     async function initializeProcess() {
         try {
@@ -957,26 +1431,38 @@
             console.log('点击电子签章按钮');
             setStatus('正在进入电子签章流程...');
             // 添加防止重复点击的标记
-            if (signButton.dataset.clicked) {
+            if (signButton.dataset.autoSignEntryClicked) {
                 console.log('电子签章按钮已经被点击过，跳过');
-                return false;
+                addAutoSignEvent('sign_entry_click_skipped', {
+                    reason: 'entry_button_already_clicked'
+                }, 'warn');
+            } else {
+                signButton.dataset.autoSignEntryClicked = 'true';
+                try {
+                    signButton.click();
+                    console.log('电子签章按钮点击成功');
+                    addAutoSignEvent('sign_entry_click', {
+                        method: 'native_click'
+                    }, 'info');
+                } catch (e) {
+                    console.log('常规点击失败，尝试模拟点击事件');
+                    const clickEvent = new MouseEvent('click', {
+                        view: window,
+                        bubbles: true,
+                        cancelable: true
+                    });
+                    signButton.dispatchEvent(clickEvent);
+                    addAutoSignEvent('sign_entry_click', {
+                        method: 'dispatch_event'
+                    }, 'info');
+                }
             }
-            signButton.dataset.clicked = 'true';
-            
-            try {
-                signButton.click();
-                console.log('电子签章按钮点击成功');
-                // 添加足够的等待时间，确保点击生效
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            } catch (e) {
-                console.log('常规点击失败，尝试模拟点击事件');
-                const clickEvent = new MouseEvent('click', {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true
-                });
-                signButton.dispatchEvent(clickEvent);
-                await new Promise(resolve => setTimeout(resolve, 2000));
+
+            const entryReady = await waitForEntryFlowReady(ENTRY_FLOW_READY_TIMEOUT);
+            if (!entryReady) {
+                notifyAttention('进入电子签章流程超过 2 分钟仍未出现处理按钮或批量签章页面，请检查页面加载状态或浏览器弹窗权限。');
+                stopProcess(true);
+                return false;
             }
 
             console.log('等待列表刷新完成...');
@@ -1011,208 +1497,23 @@
             if (!jumpedToList) {
                 await waitForElement(SELECTORS.batchSignIcon, 15000, true);
             }
-            
-            // 4. 点击“批量签章”并在弹窗内操作
-            console.log('第三步：等待批量签章按钮出现...');
-            setStatus('正在查找批量签章按钮...');
-            const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 15000, true);
-            if (!batchSignLink) {
-                console.log('未找到批量签章按钮');
-                setStatus('未找到批量签章按钮，请刷新页面后重试');
-                return false;
+            if (!(window.location.href || '').includes('librarySignature')) {
+                console.log('尚未真正进入批量签章页面，等待页面跳转后由运行状态续接流程');
+                setStatus('正在等待页面进入批量签章流程...');
+                addAutoSignEvent('todo_wait_library_signature', {
+                    url: window.location.href
+                }, 'info');
+                return true;
             }
 
-            console.log('点击批量签章按钮');
-            setStatus('正在打开批量签章窗口...');
-            const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
-            await performReliableClick(linkElement || batchSignLink);
-
-            // 等待“批量签章”对话框（回退一开始的方式：直接等复选框并全选）
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            console.log('第四步：优先尝试表头全选');
-            setStatus('正在勾选待签章文件...');
-            const headerSelected2 = await selectAllCurrentPageInDialog();
-            if (!headerSelected2) {
-                console.log('表头全选未成功，回退到原始逐一勾选');
-                const checkbox = await waitForElement('.el-checkbox__original', 10000, true);
-                if (!checkbox) {
-                    console.log('未找到复选框');
-                    setStatus('未找到待签文件复选框，请刷新页面后重试');
-                    return false;
-                }
-                console.log('选中复选框...');
-                await checkAllBoxes();
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-
-            // 点击确定按钮（原始逻辑）
-            console.log('第五步：等待确定按钮出现...');
-            const confirmButton_v1 = await waitForDialogButtonByText('批量签章', '确定', 10000);
-            if (!confirmButton_v1) {
-                console.log('未找到确定按钮');
-                return false;
-            }
-            await performReliableClick(confirmButton_v1);
-            return true;
+            // 待办页只负责进入批量签章环境；批量弹窗、首次快速勾选、
+            // 后续列表刷新稳定判断统一交给新版批量流程处理。
+            console.log('已进入批量签章环境，交给统一批量流程处理');
+            setStatus('已进入批量签章页面，准备打开批量签章窗口...');
+            return await handleBatchSignaturePage();
 
         } catch (error) {
             console.error('初始化流程出错:', error);
-            return false;
-        }
-    }
-
-    // 修改检查页面状态的函数
-    async function checkAndContinueProcess() {
-        // 检查当前页面是否是批量签章页面
-        if (!window.location.href.includes('librarySignature')) {
-            return;
-        }
-
-        console.log('检查页面状态...');
-        
-        // 等待页面完全加载
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // 查找批量签章按钮
-        console.log('查找批量签章按钮...');
-        const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 10000, true);
-        if (batchSignLink && isRunning && !manualStopped) {
-            console.log('找到批量签章按钮，准备点击');
-            // 从图标元素找到最近的a标签父元素并点击
-            const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
-            if (linkElement) {
-                linkElement.click();
-            } else {
-                // 如果找不到链接元素，尝试点击图标本身或其父元素
-                const clickTarget = batchSignLink.parentElement || batchSignLink;
-                clickTarget.click();
-            }
-            
-            // 等待弹窗出现
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // 选中所有复选框
-            await checkAllBoxes();
-            
-            // 查找并点击确定按钮
-            const confirmButton = await waitForDialogButtonByText('批量签章', '确定', 5000);
-            if (confirmButton) {
-                console.log('点击确定按钮，开始新一轮签名');
-                confirmButton.click();
-            }
-        }
-    }
-
-    // 签署完成后的处理
-    async function handleSignatureCompletion() {
-        try {
-            console.log('处理签署完成后的流程...');
-            
-            // 循环处理批量签章
-            while (isRunning) {
-                // 在每个重要步骤前检查运行状态
-                if (!isRunning) {
-                    console.log('检测到停止信号，终止处理');
-                    return false;
-                }
-
-                // 确保页面完全加载
-                console.log('等待页面加载...');
-                await new Promise(resolve => setTimeout(resolve, 3000));
-
-                // 查找批量签章按钮
-                console.log('查找批量签章按钮...');
-                const batchSignLink = await waitForElement(SELECTORS.batchSignIcon, 10000, true);
-                if (!batchSignLink || !isRunning) {
-                    console.log('未找到批量签章按钮或收到停止信号');
-                    return false;
-                }
-
-                console.log('找到批量签章按钮，准备点击');
-                // 从图标元素找到最近的a标签父元素并点击
-                const linkElement = batchSignLink.closest('a') || batchSignLink.parentElement.closest('a');
-                if (linkElement) {
-                    linkElement.click();
-                } else {
-                    // 如果找不到链接元素，尝试点击图标本身或其父元素
-                    const clickTarget = batchSignLink.parentElement || batchSignLink;
-                    clickTarget.click();
-                }
-                
-                // 等待弹窗出现
-                await new Promise(resolve => setTimeout(resolve, 1500));
-
-                // 检查是否有可选择的文件
-                const checkboxes = document.querySelectorAll(SELECTORS.batchBodyUncheckedCheckboxInput);
-                if (!checkboxes.length) {
-                    console.log('没有可选择的文件，关闭对话框');
-                    // 查找并点击取消按钮
-                    const cancelButton = await waitForDialogButtonByText('批量签章', '取消', 5000);
-                    if (cancelButton) {
-                        cancelButton.click();
-                    }
-                    // 结束循环
-                    break;
-                }
-
-                // 选中所有复选框
-                const allChecked = await checkAllBoxes();
-                if (!allChecked) {
-                    console.log('复选框选中失败');
-                    continue; // 失败后继续下一次循环
-                }
-
-                // 查找并点击确定按钮
-                const confirmButton = await waitForDialogButtonByText('批量签章', '确定', 10000);
-                if (!confirmButton) {
-                    console.log('未找到确定按钮');
-                    continue; // 失败后继续下一次循环
-                }
-
-                if (!isRunning) return false;
-
-                console.log('点击确定按钮，进入签名流程');
-                confirmButton.click();
-
-                // 设置一个定时器在原页面中定期检查状态
-                const checkInterval = setInterval(() => {
-                    if (document.visibilityState === 'visible') {
-                        console.log('页面变为可见，检查状态...');
-                        clearInterval(checkInterval);
-                        checkAndContinueProcess();
-                    }
-                }, 1000);
-
-                // 等待足够长的时间确保签名流程完成
-                await new Promise(resolve => setTimeout(resolve, 8000));
-                
-                // 清除定时器
-                clearInterval(checkInterval);
-                
-                // 继续下一次循环
-                continue;
-            }
-
-            // 所有文件处理完成后
-            if (!manualStopped) {
-                console.log('所有文件处理完成，准备重新启动流程...');
-                stopProcess(false);
-                
-                setTimeout(() => {
-                    if (!manualStopped) {
-                        console.log('重新启动流程...');
-                        startProcess();
-                    } else {
-                        console.log('检测到手动停止标记，取消自动重启');
-                    }
-                }, 3000);
-            } else {
-                console.log('检测到手动停止标记，不再重新启动');
-            }
-
-            return true;
-        } catch (error) {
-            console.error('完成处理流程出错:', error);
             return false;
         }
     }
@@ -1264,6 +1565,9 @@
                 if (hasNextFile) {
                     continue;
                 }
+                if (hasNextFile === null) {
+                    return;
+                }
 
                 console.log('所有文件已签名完成，处理完成弹窗');
                 setStatus('没有检测到待签文件，正在处理完成确认...');
@@ -1295,6 +1599,69 @@
         }
     }
 
+    function isFileItemSelected(file) {
+        if (!file) return false;
+        const targetFile = file;
+        if (targetFile.matches('.is-active, .active, .current, .selected')) {
+            return true;
+        }
+        const selectedEl = file.querySelector(
+            '.el-radio__input.is-checked, .el-checkbox__input.is-checked, .el-icon-check, .el-icon-circle-check, .el-icon-success, .is-checked, [aria-checked="true"], [aria-selected="true"]'
+        );
+        return !!selectedEl;
+    }
+
+    async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = NEXT_FILE_READY_TIMEOUT) {
+        const start = Date.now();
+        let readySince = null;
+        let lastSnapshotAt = 0;
+        addAutoSignEvent('next_file_wait_start', { timeout }, 'info');
+
+        while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return false;
+
+            await waitForLoadingGone(3000);
+            const canvas = document.querySelector(SELECTORS.signatureCanvas);
+            const signatureModule = document.querySelector(SELECTORS.signatureModule);
+            const selected = isFileItemSelected(targetFile);
+            const canvasReady = !!canvas && isElementVisible(canvas);
+            const signatureReady = !!signatureModule && isElementVisible(signatureModule);
+            const canvasChangedOrStable = !previousCanvas || canvas !== previousCanvas || Date.now() - start >= 800;
+
+            if (Date.now() - lastSnapshotAt >= 10000) {
+                addAutoSignEvent('next_file_wait_snapshot', {
+                    elapsedMs: Date.now() - start,
+                    selected,
+                    canvasReady,
+                    signatureReady,
+                    canvasChangedOrStable
+                }, selected && canvasReady && signatureReady ? 'info' : 'warn');
+                lastSnapshotAt = Date.now();
+            }
+
+            if (selected && canvasReady && signatureReady && canvasChangedOrStable) {
+                if (readySince === null) {
+                    readySince = Date.now();
+                }
+                if (Date.now() - readySince >= 300) {
+                    addAutoSignEvent('next_file_ready', {
+                        elapsedMs: Date.now() - start,
+                        selected,
+                        canvasChanged: !!previousCanvas && canvas !== previousCanvas
+                    }, 'info');
+                    return true;
+                }
+            } else {
+                readySince = null;
+            }
+
+            await new Promise(r => setTimeout(r, 100));
+        }
+
+        addAutoSignEvent('next_file_timeout', { timeout }, 'error');
+        return false;
+    }
+
     // 获取文件列表并点击第一个待签署的文件
     async function clickNextFile() {
         try {
@@ -1321,11 +1688,16 @@
             if (targetFile) {
                 console.log('找到第一个待签署文件:', targetFileName);
                 setStatus(`正在处理待签文件：${targetFileName}`);
+                const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
                 targetFile.querySelector(SELECTORS.fileTitle)?.click();
-                console.log('切换到待签署文件，等待3秒...');
-                setStatus('正在切换下一个待签文件，等待加载...');
-                // 延长等待时间，确保页面完全加载
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                console.log('切换到待签署文件，等待页面就绪...');
+                setStatus('正在切换下一个待签文件，等待页面就绪...');
+                const ready = await waitForNextFileReady(targetFile, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                if (!ready) {
+                    notifyAttention('切换待签文件超过 2 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。');
+                    stopProcess(true);
+                    return null;
+                }
                 return true;
             }
 
@@ -1335,7 +1707,7 @@
         } catch (error) {
             console.error('切换文件时出错:', error);
             setStatus('切换待签文件失败，请刷新页面后重试');
-            return false;
+            return null;
         }
     }
 
@@ -1363,8 +1735,14 @@
                     const name = titleEl?.textContent?.trim();
                     console.log('检测待签署文件:', name);
                     setStatus(`正在复查文件：${name}`);
+                    const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
                     titleEl?.click();
-                    await new Promise(r => setTimeout(r, 1500)); // 延长等待时间
+                    const ready = await waitForNextFileReady(file, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                    if (!ready) {
+                        console.log('检测流程：切换待签文件超时');
+                        setStatus('切换待签文件超时，请检查页面加载状态');
+                        return false;
+                    }
 
                     // 文件是否待签以列表 pending 状态为准；控件缺失视为异常，不再推断为已签。
                     const canvas = await waitForElement(SELECTORS.signatureCanvas, 5000, true);
@@ -1421,6 +1799,8 @@
     }
 
     function notifyAttention(message) {
+        addAutoSignLog(message, 'error');
+        addAutoSignEvent('attention_required', { message }, 'error');
         try {
             alert(message);
         } catch (e) {}
@@ -1528,6 +1908,10 @@
         return getPageType() !== 'unknown';
     }
 
+    function isCurrentPageVisible() {
+        return document.visibilityState === 'visible';
+    }
+
     function removeControlUi() {
         const toolbar = document.querySelector('div[data-auto-sign-toolbar]');
         const button = document.querySelector('button[data-auto-sign-control]');
@@ -1537,7 +1921,7 @@
         if (toolbar) toolbar.remove();
         if (button) button.remove();
         if (settingsButton) settingsButton.remove();
-        if (settingsPanel) settingsPanel.remove();
+        if (settingsPanel) closeSettingsPanel();
         if (badge) badge.remove();
         statusBadge = null;
     }
@@ -1557,6 +1941,8 @@
     let processStarted = false;
     let controlButton = null;
     let manualStopped = false;
+    let lastStopLogAt = 0;
+    let lastStopLogManual = null;
     // 屏幕常亮 Wake Lock
     let screenWakeLock = null;
     // 自动关闭 Element 消息弹窗
@@ -1663,9 +2049,14 @@
         const selectedPosition = getSignPositionMode();
         console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);
         console.log('启动处理流程');
-        setAutoSignState(AUTO_SIGN_STATES.RUNNING);
         processStarted = true;
         isRunning = true;
+        addAutoSignEvent('start_process', {
+            signPosition: selectedPosition,
+            signPositionLabel: getSignPositionLabel(selectedPosition),
+            wasAlreadyRunning
+        }, 'info');
+        setAutoSignState(AUTO_SIGN_STATES.RUNNING);
         updateRunningState(true);
         // 保持屏幕常亮，避免熄屏中断
         acquireWakeLock();
@@ -1696,14 +2087,33 @@
         }
     }
 
+    function shouldIgnoreRepeatedStop(manual) {
+        const now = Date.now();
+        return lastStopLogManual === manual && now - lastStopLogAt < 1000;
+    }
+
+    function markStopLogged(manual) {
+        lastStopLogManual = manual;
+        lastStopLogAt = Date.now();
+    }
+
     // 修改stopProcess函数
     function stopProcess(manual = false) {
         console.log('停止处理流程', manual ? '(手动停止)' : '(自动停止)');
+        const repeatedStop = shouldIgnoreRepeatedStop(manual);
+        if (!repeatedStop) {
+            addAutoSignEvent('stop_process', {
+                manual,
+                batchSubmitted: hasSubmittedBatchOnce()
+            }, manual ? 'warn' : 'info');
+            markStopLogged(manual);
+        }
         processStarted = false;
         isRunning = false;
         releaseWakeLock();
         stopAutoCloseMessageBox();
-        setStatus('已停止');
+        resetSignEntryClickedFlags();
+        setStatus('已停止', 'idle', !repeatedStop);
         
         if (manual) {
             resetBatchSubmitted();
@@ -1713,13 +2123,9 @@
         updateRunningState(false, true, manual ? AUTO_SIGN_STATES.STOPPED : AUTO_SIGN_STATES.IDLE);
 
         if (!manual) {
-            // 恢复 1.1.1 的自动停止刷新行为，用页面重新加载重新进入下一轮流程。
-            const highestTimeoutId = setTimeout(";");
-            for (let i = 0; i < highestTimeoutId; i++) {
-                clearTimeout(i);
-            }
-            window.stop();
-            location.reload();
+            addAutoSignEvent('auto_stop_without_reload', {
+                pageType: getPageTypeForLog()
+            }, 'info');
         }
     }
 
@@ -1749,7 +2155,7 @@
 
                 await waitForLoadingGone(15000);
                 if (hasSubmittedBatchOnce()) {
-                    const stable = await waitForBatchListStable(dialog);
+                    const stable = await waitForBatchListReadyByTrend(dialog);
                     if (!stable) {
                         stopProcess(true);
                         return false;
@@ -1757,7 +2163,7 @@
                 }
 
                 await waitForLoadingGone(15000);
-                const totalCount = getBatchTotalCount(dialog);
+                const totalCount = await waitForBatchTotalReady(dialog);
                 if (totalCount === 0) {
                     console.log('批量签章弹窗显示没有待签章文件，停止流程');
                     setStatus('没有检测到待签文件');
@@ -1815,7 +2221,11 @@
                 const selectedCount = getCheckedBatchRowCount(dialog);
                 await performReliableClick(confirmButton);
                 console.log('确定按钮点击成功');
-                markBatchSubmitted(totalCount, selectedCount);
+                markBatchSubmitted({
+                    totalCount,
+                    selectedCount,
+                    visibleRowCount: getVisibleBatchRowCount(dialog)
+                });
                 setStatus('正在提交本批次签章...');
                 return true;
             }
@@ -1844,16 +2254,19 @@
             if (currentUrl !== lastKnownUrl) {
                 lastKnownUrl = currentUrl;
                 syncControlVisibility();
+                if (isAutoSignRunningState() && !manualStopped && !processStarted && isCurrentPageVisible()) {
+                    startProcess();
+                }
             }
         }, 500);
         
         // 添加可见性变化监听（统一走首次入口逻辑）
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && isRunning && !manualStopped) {
+            if (isCurrentPageVisible() && isAutoSignRunningState() && !manualStopped && !processStarted) {
                 console.log('页面重新可见，检查页面类型并执行对应程序...');
                 // 页面回到可见时尝试重新申请 Wake Lock
                 acquireWakeLock();
-                handleVisibilityChange();
+                startProcess();
             }
         });
 
@@ -1862,11 +2275,28 @@
             GM_addValueChangeListener && GM_addValueChangeListener(AUTO_SIGN_STATE_KEY, (name, oldVal, newVal) => {
                 const nextState = normalizeAutoSignState(newVal);
                 console.log('GM 主运行状态变化:', nextState);
-                const shouldRun = nextState === AUTO_SIGN_STATES.RUNNING;
-                if (shouldRun && !manualStopped) {
-                    startProcess();
-                } else if (isRunning || processStarted) {
-                    stopProcess(false);
+                if (nextState === AUTO_SIGN_STATES.RUNNING) {
+                    manualStopped = false;
+                    updateRunningState(true, false, AUTO_SIGN_STATES.RUNNING);
+                    if (isCurrentPageVisible() && !processStarted && !isRunning) {
+                        resetBatchSubmitted();
+                        startProcess();
+                    } else {
+                        setStatus('运行中：其他页面正在执行');
+                    }
+                    return;
+                }
+                if (nextState === AUTO_SIGN_STATES.STOPPED) {
+                    stopProcess(true);
+                    return;
+                }
+                if (isRunning || processStarted) {
+                    processStarted = false;
+                    isRunning = false;
+                    releaseWakeLock();
+                    stopAutoCloseMessageBox();
+                    setStatus('已停止');
+                    updateRunningState(false, false, nextState);
                 }
             });
         } catch (e) {}
@@ -1879,29 +2309,12 @@
             manualStopped = true;
             updateRunningState(false, false, AUTO_SIGN_STATES.STOPPED);
         }
-        if (shouldRun && !manualStopped && !shouldManualStop) {
+        if (shouldRun && !manualStopped && !shouldManualStop && isCurrentPageVisible()) {
             console.log('检测到自动运行状态，开始执行...');
             startProcess();
+        } else if (shouldRun && !manualStopped && !shouldManualStop) {
+            updateRunningState(true, false, AUTO_SIGN_STATES.RUNNING);
+            setStatus('运行中：其他页面正在执行');
         }
     });
-
-    // 修改页面可见性变化处理函数
-    async function handleVisibilityChange() {
-        try {
-            // 等待页面完全加载
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // 获取当前页面类型
-            const pageType = getPageType();
-            console.log('当前页面类型:', pageType);
-
-            // 直接调用startProcess，复用第一遍的逻辑
-            if (isRunning && !manualStopped) {
-                console.log('页面重新可见，开始执行处理流程...');
-                startProcess();
-            }
-        } catch (error) {
-            console.error('页面可见性变化处理出错:', error);
-        }
-    }
 })(); 
