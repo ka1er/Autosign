@@ -35,7 +35,15 @@ The image must be generated with Codex image generation / img2.0 capability, not
 
 Use clear, non-sensitive visuals. Do not include real account data, business documents, internal URLs, cookies, tokens, or screenshots that expose private information.
 
-Use the approved fixed guide framework for `v1.1.8` and later releases:
+Use the approved `v1.1.8` guide image as the master template for `v1.1.8` and later releases. Do not redesign the guide image each time. Keep the overall layout, visual style, card order, icon style, color family, footer position, and stable instructional copy consistent with the approved `v1.1.8` image. For routine releases, only update:
+
+- the version number in the title
+- the version number in card 5
+- the content of card 5, `vX.Y.Z 变化`
+
+Do not change cards 1-4, the footer, or the visual structure unless the actual installation, running, settings, or troubleshooting workflow changes.
+
+The approved master template uses five cards in this order:
 
 1. `安装 / 更新脚本`
    - 推荐使用 Edge 浏览器。
