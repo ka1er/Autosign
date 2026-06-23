@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.8
+// @version      1.1.9-beta
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -664,7 +664,7 @@
             const lines = [
                 'Autosign 问题日志',
                 `导出时间：${new Date().toLocaleString()}`,
-                '脚本版本：1.1.8',
+                '脚本版本：1.1.9-beta',
                 `当前页面：${getSafeLogUrl()}`,
                 `页面类型：${getPageTypeForLog()}`,
                 `浏览器：${navigator.userAgent}`,
@@ -1422,9 +1422,13 @@
             setStatus('正在查找电子签章入口...');
             const signButton = await findSignButton();
             if (!signButton) {
-                console.log('未找到电子签章按钮，停止流程');
-                setStatus('未找到电子签章入口，请刷新页面后重试');
-                return false;
+                console.log('未找到电子签章按钮，按无电子签章待办处理并停止流程');
+                addAutoSignEvent('todo_no_sign_entry', {
+                    pageType: getPageTypeForLog()
+                }, 'info');
+                stopProcess(true);
+                setStatus('没有电子签章待办，已停止', 'idle');
+                return true;
             }
 
             // 2. 点击电子签章按钮
