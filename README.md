@@ -37,11 +37,27 @@ Autosign/
 
 ## 使用方式
 
+推荐通过 GreasyFork 安装：
+
+- [PMS系统自动签章助手](https://greasyfork.org/zh-CN/scripts/581460-pms%E7%B3%BB%E7%BB%9F%E8%87%AA%E5%8A%A8%E7%AD%BE%E7%AB%A0%E5%8A%A9%E6%89%8B)
+
+也可以手动安装：
+
 1. 安装 Tampermonkey 浏览器插件。
 2. 打开 Tampermonkey 管理面板。
 3. 新建脚本。
 4. 将 `autoSign.js` 内容复制到 Tampermonkey 中并保存。
 5. 打开目标业务页面后使用脚本提供的运行按钮。
+
+## 更新注意事项
+
+更新脚本时，建议先在 Tampermonkey 中删除旧版本脚本，再新增安装新版本脚本。
+
+不建议在旧脚本编辑页面直接拖入新脚本并选择覆盖，因为 Tampermonkey 会根据脚本头部的 `@name`、`@namespace`、`@version` 等元数据判断是否更新，遇到缓存、版本号或元数据变化时，可能出现看似覆盖但实际仍运行旧版本的情况。
+
+如果通过 GreasyFork 安装，后续可以在 Tampermonkey 中使用脚本更新功能：
+
+- [PMS系统自动签章助手](https://greasyfork.org/zh-CN/scripts/581460-pms%E7%B3%BB%E7%BB%9F%E8%87%AA%E5%8A%A8%E7%AD%BE%E7%AB%A0%E5%8A%A9%E6%89%8B)
 
 ## 首次使用与常见问题
 
