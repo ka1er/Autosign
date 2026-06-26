@@ -1,79 +1,77 @@
 # Autosign Agent Notes
 
-## Release asset naming
+## Project Scope
 
-Keep the repository source filenames stable:
+This repository maintains the Autosign Tampermonkey userscript for PMS electronic signature workflows.
+
+Keep the repository focused on source code, user-facing documentation, release notes, and project maintenance notes. Do not commit real business documents, screenshots with private data, account information, cookies, tokens, exported logs, browser cache, videos, or local-only test data.
+
+## Core Files
+
+Keep these source filenames stable:
+
+- `autoSign.js`
+- `README.md`
+- `CHANGELOG.md`
+- `AGENTS.md`
+
+The real script version is the `@version` value in the userscript header of `autoSign.js`.
+
+## Change Principles
+
+- Prefer the existing script structure and local helper functions.
+- Keep changes scoped to the current issue; avoid unrelated refactors.
+- Before changing automation flow, consider all affected pages: todo page, batch signature page, and signature page.
+- Be especially careful with run/stop state, cross-page state sync, popup handling, timed refresh, batch selection, and file switching.
+- Do not reintroduce a page execution lock that blocks normal handoff between PMS pages.
+- Do not clear all page timeouts globally; avoid interfering with PMS page timers.
+- Do not use real business data in examples or tests.
+
+## Testing
+
+After changing `autoSign.js`, run at least:
+
+```powershell
+node --check .\autoSign.js
+```
+
+If the change touches logic covered by local tests, run the related `tests/*.test.js` files as well.
+
+Local tests can be used for regression checks, but release assets should not include test files unless the user explicitly requests it.
+
+## Versioning
+
+- Stable, business-tested builds should be published as normal releases.
+- Untested or newly adjusted workflow logic should be published as beta first.
+- Small fixes found during the same beta testing phase should stay in the current beta version/release unless the user asks for a new version number.
+- Beta releases do not need a feature introduction image.
+- Formal recommended releases should include clear, user-facing release notes.
+- Write `CHANGELOG.md` in plain user language. Avoid overly technical descriptions unless they help troubleshooting.
+
+## Release Assets
+
+Release assets should include separate files:
 
 - `autoSign.js`
 - `README.md`
 - `CHANGELOG.md`
 
-When publishing GitHub Release assets, use versioned filenames so downloaded files are easy to identify:
+Do not publish only a zip archive. Do not commit generated release copies back into the source tree unless the user explicitly asks.
 
-- `autosign-vX.Y.Z.js`
-- `autosign-vX.Y.Z-readme.md`
-- `autosign-vX.Y.Z-changelog.md`
+## Guide Images
 
-For pre-release versions, keep the full tag in the filename:
+Formal recommended releases can include a Chinese feature and usage guide image.
 
-- `autosign-v1.1.8-beta.js`
+Guide image requirements:
 
-Do not commit these versioned release files back into the source tree unless explicitly requested. Generate them from the release tag or release commit during publishing.
+- Generate with img2.0.
+- Explain installation, update, running, settings, common issues, and version changes for both new and existing users.
+- Do not include real accounts, business files, internal URLs, cookies, tokens, or sensitive screenshots.
+- Beta versions do not require a guide image.
 
-## User guide image for v1.1.8 and later
+## Git Workflow
 
-Starting with `v1.1.8`, each recommended release should include a user guide image asset:
-
-- `autosign-vX.Y.Z-guide.png`
-
-The image must be generated with Codex image generation / img2.0 capability, not hand-built with local drawing scripts. The image should be a user-facing Chinese infographic that covers:
-
-- main script features
-- changes in the current version
-- common problems and troubleshooting
-- installation and update guidance
-
-Use clear, non-sensitive visuals. Do not include real account data, business documents, internal URLs, cookies, tokens, or screenshots that expose private information.
-
-Use the approved `v1.1.8` guide image as the master template for `v1.1.8` and later releases. Do not redesign the guide image each time. Keep the overall layout, visual style, card order, icon style, color family, footer position, and stable instructional copy consistent with the approved `v1.1.8` image. For routine releases, only update:
-
-- the version number in the title
-- the version number in card 5
-- the content of card 5, `vX.Y.Z 变化`
-
-Do not change cards 1-4, the footer, or the visual structure unless the actual installation, running, settings, or troubleshooting workflow changes.
-
-The approved master template uses five cards in this order:
-
-1. `安装 / 更新脚本`
-   - 推荐使用 Edge 浏览器。
-   - 说明 Tampermonkey 安装后要打开 `允许用户脚本`。
-   - 在线安装路径：GreasyFork 搜索 `PMS系统自动签章助手`，打开脚本页并安装。
-   - 手动安装路径：打开 Tampermonkey 管理面板，拖入 `.js` 脚本并保存。
-   - 手动更新建议：先删除旧脚本，再拖入新脚本安装。
-2. `运行使用`
-   - 打开 PMS 业务页面。
-   - 点击 `更多`，进入 `待办` 页面。
-   - 在待办页面看到运行按钮后点击运行，并按状态提示等待。
-3. `功能设置`
-   - 可自定义签章位置。
-   - 可调整查询间隔。
-   - 可导出运行日志。
-   - 支持运行、停止、重新运行。
-4. `常见问题`
-   - 没有运行按钮：先确认已进入待办页面。
-   - 脚本不运行：右击 Tampermonkey 图标，进入管理扩展，打开允许用户脚本。
-   - 卡在批量签章页：点击地址栏弹窗拦截图标，选择允许。
-   - 仍无法运行：刷新页面后重试，必要时导出日志反馈。
-5. `vX.Y.Z 变化`
-   - Only this section should change between releases unless the install, run, settings, or troubleshooting workflow actually changes.
-
-The footer should keep the update advice concise: can connect to the internet -> prefer GreasyFork; when receiving a new script file -> delete the old version first, then drag in and install the new file.
-
-For `v1.1.8`, the guide image should highlight:
-
-- more reliable batch signature list refresh
-- safer file switching on the signature page
-- clearer running status messages
-- log export for troubleshooting
-- Tampermonkey update advice: delete the old manually installed script before adding the new one, or use Tampermonkey update when installed through GreasyFork
+- Use `main` as the default maintenance branch for release-ready project state.
+- Avoid keeping misleading old working branch names.
+- Do not delete, reset, overwrite, or revert user changes without explicit confirmation.
+- Before publishing, confirm the local branch and `origin/main` state are understood.

@@ -17,11 +17,11 @@
 
     const SIGN_POSITION_KEY = 'autoSignPosition';
     const QUERY_INTERVAL_KEY = 'autoSignQueryIntervalSeconds';
+    const NEXT_FILE_TIMEOUT_KEY = 'autoSignNextFileTimeoutMinutes';
     const AUTO_SIGN_STATE_KEY = 'autoSignState';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
     const AUTO_SIGN_LOG_KEY = 'autoSignRecentLogs';
-    const NEXT_FILE_READY_TIMEOUT = 120000;
     const ENTRY_FLOW_READY_TIMEOUT = 120000;
     const AUTO_SIGN_STATES = Object.freeze({
         IDLE: 'idle',
@@ -195,16 +195,16 @@
     }
 
     function getQueryIntervalSeconds() {
-        let seconds = Number(localStorage.getItem(QUERY_INTERVAL_KEY));
+        let rawSeconds = localStorage.getItem(QUERY_INTERVAL_KEY);
         try {
             const gmValue = GM_getValue && GM_getValue(QUERY_INTERVAL_KEY);
             if (gmValue !== undefined && gmValue !== null && gmValue !== '') {
-                seconds = Number(gmValue);
+                rawSeconds = gmValue;
             }
         } catch (e) {}
-        if (!Number.isFinite(seconds)) {
-            seconds = 3;
-        }
+        const seconds = rawSeconds === null || rawSeconds === undefined || rawSeconds === ''
+            ? 3
+            : Number(rawSeconds);
         return Math.min(Math.max(Math.round(seconds), 3), 15);
     }
 
@@ -217,6 +217,38 @@
 
     function getQueryIntervalMs() {
         return getQueryIntervalSeconds() * 1000;
+    }
+
+    function normalizeNextFileTimeoutMinutes(minutes) {
+        if (!Number.isFinite(minutes)) {
+            minutes = 5;
+        }
+        return Math.min(Math.max(Math.round(minutes), 1), 10);
+    }
+
+    function getNextFileTimeoutMinutes() {
+        let rawMinutes = localStorage.getItem(NEXT_FILE_TIMEOUT_KEY);
+        try {
+            const gmValue = GM_getValue && GM_getValue(NEXT_FILE_TIMEOUT_KEY);
+            if (gmValue !== undefined && gmValue !== null && gmValue !== '') {
+                rawMinutes = gmValue;
+            }
+        } catch (e) {}
+        const minutes = rawMinutes === null || rawMinutes === undefined || rawMinutes === ''
+            ? 5
+            : Number(rawMinutes);
+        return normalizeNextFileTimeoutMinutes(minutes);
+    }
+
+    function setNextFileTimeoutMinutes(minutes) {
+        const normalizedMinutes = normalizeNextFileTimeoutMinutes(Number(minutes));
+        try { GM_setValue && GM_setValue(NEXT_FILE_TIMEOUT_KEY, normalizedMinutes); } catch (e) {}
+        localStorage.setItem(NEXT_FILE_TIMEOUT_KEY, String(normalizedMinutes));
+        return normalizedMinutes;
+    }
+
+    function getNextFileTimeoutMs() {
+        return getNextFileTimeoutMinutes() * 60 * 1000;
     }
 
     function normalizeAutoSignState(state) {
@@ -322,6 +354,8 @@
         const disabledHint = document.querySelector('div[data-auto-sign-settings-running-hint]');
         const queryIntervalDecrease = document.querySelector('button[data-auto-sign-query-interval-decrease]');
         const queryIntervalIncrease = document.querySelector('button[data-auto-sign-query-interval-increase]');
+        const nextFileTimeoutDecrease = document.querySelector('button[data-auto-sign-next-file-timeout-decrease]');
+        const nextFileTimeoutIncrease = document.querySelector('button[data-auto-sign-next-file-timeout-increase]');
         updateSignPositionButtons();
         if (queryIntervalDecrease) {
             queryIntervalDecrease.disabled = running === true;
@@ -332,6 +366,16 @@
             queryIntervalIncrease.disabled = running === true;
             queryIntervalIncrease.style.opacity = running ? '0.55' : '1';
             queryIntervalIncrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (nextFileTimeoutDecrease) {
+            nextFileTimeoutDecrease.disabled = running === true;
+            nextFileTimeoutDecrease.style.opacity = running ? '0.55' : '1';
+            nextFileTimeoutDecrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (nextFileTimeoutIncrease) {
+            nextFileTimeoutIncrease.disabled = running === true;
+            nextFileTimeoutIncrease.style.opacity = running ? '0.55' : '1';
+            nextFileTimeoutIncrease.style.cursor = running ? 'not-allowed' : 'pointer';
         }
         if (disabledHint) {
             disabledHint.style.display = running ? 'block' : 'none';
@@ -508,6 +552,90 @@
         querySection.appendChild(queryIntervalRow);
         querySection.appendChild(queryHelp);
 
+        const timeoutSection = document.createElement('div');
+        timeoutSection.style.marginTop = '10px';
+        timeoutSection.style.padding = '10px';
+        timeoutSection.style.border = '1px solid #ebeef5';
+        timeoutSection.style.borderRadius = '8px';
+        timeoutSection.style.backgroundColor = '#fff';
+
+        const timeoutLabel = document.createElement('div');
+        timeoutLabel.innerText = '文件加载超时';
+        timeoutLabel.style.marginBottom = '8px';
+        timeoutLabel.style.fontWeight = '700';
+        timeoutLabel.style.color = '#303133';
+
+        const timeoutRow = document.createElement('div');
+        timeoutRow.style.display = 'flex';
+        timeoutRow.style.alignItems = 'center';
+        timeoutRow.style.gap = '8px';
+
+        const timeoutDecrease = document.createElement('button');
+        timeoutDecrease.setAttribute('data-auto-sign-next-file-timeout-decrease', 'true');
+        timeoutDecrease.innerText = '-';
+        timeoutDecrease.style.width = '32px';
+        timeoutDecrease.style.height = '30px';
+        timeoutDecrease.style.border = '1px solid #dcdfe6';
+        timeoutDecrease.style.borderRadius = '6px';
+        timeoutDecrease.style.backgroundColor = '#fff';
+        timeoutDecrease.style.cursor = 'pointer';
+        timeoutDecrease.style.fontWeight = '700';
+
+        const timeoutValue = document.createElement('span');
+        timeoutValue.setAttribute('data-auto-sign-next-file-timeout-value', 'true');
+        timeoutValue.style.display = 'inline-block';
+        timeoutValue.style.minWidth = '64px';
+        timeoutValue.style.height = '30px';
+        timeoutValue.style.lineHeight = '30px';
+        timeoutValue.style.textAlign = 'center';
+        timeoutValue.style.border = '1px solid #dcdfe6';
+        timeoutValue.style.borderRadius = '6px';
+        timeoutValue.style.backgroundColor = '#f5f7fa';
+        timeoutValue.style.fontWeight = '700';
+        timeoutValue.style.color = '#1f2d3d';
+
+        const timeoutIncrease = document.createElement('button');
+        timeoutIncrease.setAttribute('data-auto-sign-next-file-timeout-increase', 'true');
+        timeoutIncrease.innerText = '+';
+        timeoutIncrease.style.width = '32px';
+        timeoutIncrease.style.height = '30px';
+        timeoutIncrease.style.border = '1px solid #dcdfe6';
+        timeoutIncrease.style.borderRadius = '6px';
+        timeoutIncrease.style.backgroundColor = '#fff';
+        timeoutIncrease.style.cursor = 'pointer';
+        timeoutIncrease.style.fontWeight = '700';
+
+        const updateTimeoutValue = () => {
+            timeoutValue.innerText = `${getNextFileTimeoutMinutes()} 分钟`;
+        };
+        const changeTimeout = step => {
+            if (isAutoSignRunningState()) {
+                setStatus('运行中：停止后才能修改文件加载超时');
+                return;
+            }
+            const minutes = setNextFileTimeoutMinutes(getNextFileTimeoutMinutes() + step);
+            timeoutValue.innerText = `${minutes} 分钟`;
+            setStatus(`已设置文件加载超时：${minutes} 分钟`);
+        };
+        timeoutDecrease.onclick = () => changeTimeout(-1);
+        timeoutIncrease.onclick = () => changeTimeout(1);
+        updateTimeoutValue();
+
+        timeoutRow.appendChild(timeoutDecrease);
+        timeoutRow.appendChild(timeoutValue);
+        timeoutRow.appendChild(timeoutIncrease);
+
+        const timeoutHelp = document.createElement('div');
+        timeoutHelp.innerText = '切换下一个文件后，等待画布和签名模块加载的最长时间；网速慢可调大。';
+        timeoutHelp.style.marginTop = '8px';
+        timeoutHelp.style.fontSize = '12px';
+        timeoutHelp.style.color = '#606266';
+        timeoutHelp.style.lineHeight = '1.4';
+
+        timeoutSection.appendChild(timeoutLabel);
+        timeoutSection.appendChild(timeoutRow);
+        timeoutSection.appendChild(timeoutHelp);
+
         const disabledHint = document.createElement('div');
         disabledHint.setAttribute('data-auto-sign-settings-running-hint', 'true');
         disabledHint.innerText = '运行中请先停止再修改设置';
@@ -558,6 +686,7 @@
 
         panel.appendChild(positionSection);
         panel.appendChild(querySection);
+        panel.appendChild(timeoutSection);
         panel.appendChild(feedbackSection);
         panel.appendChild(disabledHint);
         document.body.appendChild(panel);
@@ -630,7 +759,8 @@
                     processStarted,
                     manualStopped,
                     batchSubmitted: sessionStorage.getItem(BATCH_SUBMITTED_KEY) === 'true',
-                    queryIntervalSeconds: getQueryIntervalSeconds()
+                    queryIntervalSeconds: getQueryIntervalSeconds(),
+                    nextFileTimeoutMinutes: getNextFileTimeoutMinutes()
                 }
             });
             sessionStorage.setItem(AUTO_SIGN_LOG_KEY, JSON.stringify(logs.slice(-300)));
@@ -671,6 +801,7 @@
                 `运行状态：${getAutoSignState()}`,
                 `签章位置：${getSignPositionLabel(getSignPositionMode())}`,
                 `查询间隔：${getQueryIntervalSeconds()} 秒`,
+                `文件加载超时：${getNextFileTimeoutMinutes()} 分钟`,
                 `批次已提交标记：${hasSubmittedBatchOnce() ? '是' : '否'}`,
                 '',
                 '最近日志：',
@@ -1615,11 +1746,14 @@
         return !!selectedEl;
     }
 
-    async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = NEXT_FILE_READY_TIMEOUT) {
+    async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = getNextFileTimeoutMs()) {
         const start = Date.now();
         let readySince = null;
         let lastSnapshotAt = 0;
-        addAutoSignEvent('next_file_wait_start', { timeout }, 'info');
+        addAutoSignEvent('next_file_wait_start', {
+            timeout,
+            timeoutMinutes: getNextFileTimeoutMinutes()
+        }, 'info');
 
         while (Date.now() - start < timeout) {
             if (!isRunning || manualStopped) return false;
@@ -1627,7 +1761,6 @@
             await waitForLoadingGone(3000);
             const canvas = document.querySelector(SELECTORS.signatureCanvas);
             const signatureModule = document.querySelector(SELECTORS.signatureModule);
-            const selected = isFileItemSelected(targetFile);
             const canvasReady = !!canvas && isElementVisible(canvas);
             const signatureReady = !!signatureModule && isElementVisible(signatureModule);
             const canvasChangedOrStable = !previousCanvas || canvas !== previousCanvas || Date.now() - start >= 800;
@@ -1635,22 +1768,20 @@
             if (Date.now() - lastSnapshotAt >= 10000) {
                 addAutoSignEvent('next_file_wait_snapshot', {
                     elapsedMs: Date.now() - start,
-                    selected,
                     canvasReady,
                     signatureReady,
                     canvasChangedOrStable
-                }, selected && canvasReady && signatureReady ? 'info' : 'warn');
+                }, canvasReady && signatureReady ? 'info' : 'warn');
                 lastSnapshotAt = Date.now();
             }
 
-            if (selected && canvasReady && signatureReady && canvasChangedOrStable) {
+            if (canvasReady && signatureReady && canvasChangedOrStable) {
                 if (readySince === null) {
                     readySince = Date.now();
                 }
                 if (Date.now() - readySince >= 300) {
                     addAutoSignEvent('next_file_ready', {
                         elapsedMs: Date.now() - start,
-                        selected,
                         canvasChanged: !!previousCanvas && canvas !== previousCanvas
                     }, 'info');
                     return true;
@@ -1662,7 +1793,10 @@
             await new Promise(r => setTimeout(r, 100));
         }
 
-        addAutoSignEvent('next_file_timeout', { timeout }, 'error');
+        addAutoSignEvent('next_file_timeout', {
+            timeout,
+            timeoutMinutes: getNextFileTimeoutMinutes()
+        }, 'error');
         return false;
     }
 
@@ -1696,9 +1830,9 @@
                 targetFile.querySelector(SELECTORS.fileTitle)?.click();
                 console.log('切换到待签署文件，等待页面就绪...');
                 setStatus('正在切换下一个待签文件，等待页面就绪...');
-                const ready = await waitForNextFileReady(targetFile, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                const ready = await waitForNextFileReady(targetFile, previousCanvas);
                 if (!ready) {
-                    notifyAttention('切换待签文件超过 2 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。');
+                    notifyAttention(`切换待签文件超过 ${getNextFileTimeoutMinutes()} 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。`);
                     stopProcess(true);
                     return null;
                 }
@@ -1741,7 +1875,7 @@
                     setStatus(`正在复查文件：${name}`);
                     const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
                     titleEl?.click();
-                    const ready = await waitForNextFileReady(file, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                    const ready = await waitForNextFileReady(file, previousCanvas);
                     if (!ready) {
                         console.log('检测流程：切换待签文件超时');
                         setStatus('切换待签文件超时，请检查页面加载状态');
