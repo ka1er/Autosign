@@ -57,12 +57,17 @@
     });
     const SIGN_POSITION_OPTIONS = [
         { value: 'top-left', label: '左上' },
-        { value: 'bottom-left', label: '左下' },
-        { value: 'bottom-right', label: '右下' },
+        { value: 'top-center', label: '上中' },
         { value: 'top-right', label: '右上' },
-        { value: 'center', label: '中间' },
-        { value: 'random', label: '随机位置' }
+        { value: 'middle-left', label: '左中' },
+        { value: 'center', label: '居中' },
+        { value: 'middle-right', label: '右中' },
+        { value: 'bottom-left', label: '左下' },
+        { value: 'bottom-center', label: '下中' },
+        { value: 'bottom-right', label: '右下' }
     ];
+    const RANDOM_SIGN_POSITION_MODES = SIGN_POSITION_OPTIONS.map(option => option.value);
+    const RANDOM_SIGN_POSITION_OPTION = { value: 'random', label: '随机' };
 
     function getControlToolbar() {
         let toolbar = document.querySelector('div[data-auto-sign-toolbar]');
@@ -175,19 +180,19 @@
         try {
             mode = (GM_getValue && GM_getValue(SIGN_POSITION_KEY)) || mode;
         } catch (e) {}
-        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+        if (!SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).some(option => option.value === mode)) {
             mode = 'top-right';
         }
         return mode;
     }
 
     function getSignPositionLabel(mode) {
-        const option = SIGN_POSITION_OPTIONS.find(item => item.value === mode);
+        const option = SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).find(item => item.value === mode);
         return option ? option.label : '右上';
     }
 
     function setSignPositionMode(mode) {
-        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+        if (!SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).some(option => option.value === mode)) {
             return;
         }
         try { GM_setValue && GM_setValue(SIGN_POSITION_KEY, mode); } catch (e) {}
@@ -448,7 +453,7 @@
         positionGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
         positionGrid.style.gap = '6px';
 
-        SIGN_POSITION_OPTIONS.forEach(option => {
+        const createPositionButton = option => {
             const item = document.createElement('button');
             item.setAttribute('data-auto-sign-position-option', 'true');
             item.dataset.value = option.value;
@@ -462,11 +467,20 @@
                 updateSignPositionButtons();
                 setStatus(`已选择签字位置：${option.label}`);
             };
-            positionGrid.appendChild(item);
+            return item;
+        };
+
+        SIGN_POSITION_OPTIONS.forEach(option => {
+            positionGrid.appendChild(createPositionButton(option));
         });
+
+        const randomPositionButton = createPositionButton(RANDOM_SIGN_POSITION_OPTION);
+        randomPositionButton.style.marginTop = '8px';
+        randomPositionButton.style.width = '100%';
 
         positionSection.appendChild(label);
         positionSection.appendChild(positionGrid);
+        positionSection.appendChild(randomPositionButton);
 
         const querySection = document.createElement('div');
         querySection.style.marginTop = '10px';
@@ -484,12 +498,14 @@
         const queryIntervalRow = document.createElement('div');
         queryIntervalRow.style.display = 'flex';
         queryIntervalRow.style.alignItems = 'center';
+        queryIntervalRow.style.justifyContent = 'center';
         queryIntervalRow.style.gap = '8px';
+        queryIntervalRow.style.width = '100%';
 
         const queryIntervalDecrease = document.createElement('button');
         queryIntervalDecrease.setAttribute('data-auto-sign-query-interval-decrease', 'true');
         queryIntervalDecrease.innerText = '-';
-        queryIntervalDecrease.style.width = '32px';
+        queryIntervalDecrease.style.width = '44px';
         queryIntervalDecrease.style.height = '30px';
         queryIntervalDecrease.style.border = '1px solid #dcdfe6';
         queryIntervalDecrease.style.borderRadius = '6px';
@@ -500,7 +516,7 @@
         const queryIntervalValue = document.createElement('span');
         queryIntervalValue.setAttribute('data-auto-sign-query-interval-value', 'true');
         queryIntervalValue.style.display = 'inline-block';
-        queryIntervalValue.style.minWidth = '64px';
+        queryIntervalValue.style.minWidth = '96px';
         queryIntervalValue.style.height = '30px';
         queryIntervalValue.style.lineHeight = '30px';
         queryIntervalValue.style.textAlign = 'center';
@@ -513,7 +529,7 @@
         const queryIntervalIncrease = document.createElement('button');
         queryIntervalIncrease.setAttribute('data-auto-sign-query-interval-increase', 'true');
         queryIntervalIncrease.innerText = '+';
-        queryIntervalIncrease.style.width = '32px';
+        queryIntervalIncrease.style.width = '44px';
         queryIntervalIncrease.style.height = '30px';
         queryIntervalIncrease.style.border = '1px solid #dcdfe6';
         queryIntervalIncrease.style.borderRadius = '6px';
@@ -568,12 +584,14 @@
         const timeoutRow = document.createElement('div');
         timeoutRow.style.display = 'flex';
         timeoutRow.style.alignItems = 'center';
+        timeoutRow.style.justifyContent = 'center';
         timeoutRow.style.gap = '8px';
+        timeoutRow.style.width = '100%';
 
         const timeoutDecrease = document.createElement('button');
         timeoutDecrease.setAttribute('data-auto-sign-next-file-timeout-decrease', 'true');
         timeoutDecrease.innerText = '-';
-        timeoutDecrease.style.width = '32px';
+        timeoutDecrease.style.width = '44px';
         timeoutDecrease.style.height = '30px';
         timeoutDecrease.style.border = '1px solid #dcdfe6';
         timeoutDecrease.style.borderRadius = '6px';
@@ -584,7 +602,7 @@
         const timeoutValue = document.createElement('span');
         timeoutValue.setAttribute('data-auto-sign-next-file-timeout-value', 'true');
         timeoutValue.style.display = 'inline-block';
-        timeoutValue.style.minWidth = '64px';
+        timeoutValue.style.minWidth = '96px';
         timeoutValue.style.height = '30px';
         timeoutValue.style.lineHeight = '30px';
         timeoutValue.style.textAlign = 'center';
@@ -597,7 +615,7 @@
         const timeoutIncrease = document.createElement('button');
         timeoutIncrease.setAttribute('data-auto-sign-next-file-timeout-increase', 'true');
         timeoutIncrease.innerText = '+';
-        timeoutIncrease.style.width = '32px';
+        timeoutIncrease.style.width = '44px';
         timeoutIncrease.style.height = '30px';
         timeoutIncrease.style.border = '1px solid #dcdfe6';
         timeoutIncrease.style.borderRadius = '6px';
@@ -852,34 +870,47 @@
         } catch (e) {}
     }
 
-    // 计算签名位置
-    function calculateSignPosition(canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const mode = getSignPositionMode();
-        const marginX = rect.width * 0.1;
-        const marginY = rect.height * 0.1;
+    function calculateFixedSignPosition(rect, mode, marginX, marginY) {
         if (mode === 'top-left') {
             return { x: rect.left + marginX, y: rect.top + marginY };
+        }
+        if (mode === 'top-center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + marginY };
         }
         if (mode === 'bottom-left') {
             return { x: rect.left + marginX, y: rect.bottom - marginY };
         }
+        if (mode === 'bottom-center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.bottom - marginY };
+        }
         if (mode === 'bottom-right') {
             return { x: rect.right - marginX, y: rect.bottom - marginY };
         }
-        if (mode === 'center') {
-            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.25) };
+        if (mode === 'middle-left') {
+            return { x: rect.left + marginX, y: rect.top + (rect.height * 0.5) };
         }
-        if (mode === 'random') {
-            return {
-                x: rect.left + marginX + (Math.random() * (rect.width - marginX * 2)),
-                y: rect.top + marginY + (Math.random() * (rect.height - marginY * 2))
-            };
+        if (mode === 'center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.5) };
+        }
+        if (mode === 'middle-right') {
+            return { x: rect.right - marginX, y: rect.top + (rect.height * 0.5) };
         }
         return {
-            x: rect.right - (rect.width * 0.1), // 右上角，距离右边缘 10%
-            y: rect.top + (rect.height * 0.1)   // 右上角，距离上边缘 10%
+            x: rect.right - marginX,
+            y: rect.top + marginY
         };
+    }
+
+    // 计算签名位置
+    function calculateSignPosition(canvas) {
+        const rect = canvas.getBoundingClientRect();
+        let mode = getSignPositionMode();
+        const marginX = rect.width * 0.05;
+        const marginY = rect.height * 0.05;
+        if (mode === 'random') {
+            mode = RANDOM_SIGN_POSITION_MODES[Math.floor(Math.random() * RANDOM_SIGN_POSITION_MODES.length)];
+        }
+        return calculateFixedSignPosition(rect, mode, marginX, marginY);
     }
 
     // 模拟鼠标点击（不依赖 view; 依次派发 pointer/mouse 序列）
