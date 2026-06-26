@@ -10,6 +10,7 @@ Thumbs.db
 *.bak
 
 # Local-only data
+AGENTS.md
 local/
 private/
 test-data/
