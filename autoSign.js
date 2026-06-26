@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.8
+// @version      1.1.9
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -17,11 +17,12 @@
 
     const SIGN_POSITION_KEY = 'autoSignPosition';
     const QUERY_INTERVAL_KEY = 'autoSignQueryIntervalSeconds';
+    const NEXT_FILE_TIMEOUT_KEY = 'autoSignNextFileTimeoutMinutes';
     const AUTO_SIGN_STATE_KEY = 'autoSignState';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
     const AUTO_SIGN_LOG_KEY = 'autoSignRecentLogs';
-    const NEXT_FILE_READY_TIMEOUT = 120000;
+    const LOCAL_SIGNED_FILE_ATTR = 'data-auto-sign-locally-signed';
     const ENTRY_FLOW_READY_TIMEOUT = 120000;
     const AUTO_SIGN_STATES = Object.freeze({
         IDLE: 'idle',
@@ -57,12 +58,17 @@
     });
     const SIGN_POSITION_OPTIONS = [
         { value: 'top-left', label: '左上' },
-        { value: 'bottom-left', label: '左下' },
-        { value: 'bottom-right', label: '右下' },
+        { value: 'top-center', label: '上中' },
         { value: 'top-right', label: '右上' },
-        { value: 'center', label: '中间' },
-        { value: 'random', label: '随机位置' }
+        { value: 'middle-left', label: '左中' },
+        { value: 'center', label: '居中' },
+        { value: 'middle-right', label: '右中' },
+        { value: 'bottom-left', label: '左下' },
+        { value: 'bottom-center', label: '下中' },
+        { value: 'bottom-right', label: '右下' }
     ];
+    const RANDOM_SIGN_POSITION_MODES = SIGN_POSITION_OPTIONS.map(option => option.value);
+    const RANDOM_SIGN_POSITION_OPTION = { value: 'random', label: '随机' };
 
     function getControlToolbar() {
         let toolbar = document.querySelector('div[data-auto-sign-toolbar]');
@@ -129,6 +135,7 @@
                 setAutoSignState(AUTO_SIGN_STATES.IDLE);
                 resetBatchSubmitted();
                 resetSignEntryClickedFlags();
+                clearLocalSignedFileMarkers();
                 startProcess();
             }
         };
@@ -175,19 +182,19 @@
         try {
             mode = (GM_getValue && GM_getValue(SIGN_POSITION_KEY)) || mode;
         } catch (e) {}
-        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+        if (!SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).some(option => option.value === mode)) {
             mode = 'top-right';
         }
         return mode;
     }
 
     function getSignPositionLabel(mode) {
-        const option = SIGN_POSITION_OPTIONS.find(item => item.value === mode);
+        const option = SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).find(item => item.value === mode);
         return option ? option.label : '右上';
     }
 
     function setSignPositionMode(mode) {
-        if (!SIGN_POSITION_OPTIONS.some(option => option.value === mode)) {
+        if (!SIGN_POSITION_OPTIONS.concat(RANDOM_SIGN_POSITION_OPTION).some(option => option.value === mode)) {
             return;
         }
         try { GM_setValue && GM_setValue(SIGN_POSITION_KEY, mode); } catch (e) {}
@@ -195,16 +202,16 @@
     }
 
     function getQueryIntervalSeconds() {
-        let seconds = Number(localStorage.getItem(QUERY_INTERVAL_KEY));
+        let rawSeconds = localStorage.getItem(QUERY_INTERVAL_KEY);
         try {
             const gmValue = GM_getValue && GM_getValue(QUERY_INTERVAL_KEY);
             if (gmValue !== undefined && gmValue !== null && gmValue !== '') {
-                seconds = Number(gmValue);
+                rawSeconds = gmValue;
             }
         } catch (e) {}
-        if (!Number.isFinite(seconds)) {
-            seconds = 3;
-        }
+        const seconds = rawSeconds === null || rawSeconds === undefined || rawSeconds === ''
+            ? 3
+            : Number(rawSeconds);
         return Math.min(Math.max(Math.round(seconds), 3), 15);
     }
 
@@ -217,6 +224,38 @@
 
     function getQueryIntervalMs() {
         return getQueryIntervalSeconds() * 1000;
+    }
+
+    function normalizeNextFileTimeoutMinutes(minutes) {
+        if (!Number.isFinite(minutes)) {
+            minutes = 5;
+        }
+        return Math.min(Math.max(Math.round(minutes), 1), 10);
+    }
+
+    function getNextFileTimeoutMinutes() {
+        let rawMinutes = localStorage.getItem(NEXT_FILE_TIMEOUT_KEY);
+        try {
+            const gmValue = GM_getValue && GM_getValue(NEXT_FILE_TIMEOUT_KEY);
+            if (gmValue !== undefined && gmValue !== null && gmValue !== '') {
+                rawMinutes = gmValue;
+            }
+        } catch (e) {}
+        const minutes = rawMinutes === null || rawMinutes === undefined || rawMinutes === ''
+            ? 5
+            : Number(rawMinutes);
+        return normalizeNextFileTimeoutMinutes(minutes);
+    }
+
+    function setNextFileTimeoutMinutes(minutes) {
+        const normalizedMinutes = normalizeNextFileTimeoutMinutes(Number(minutes));
+        try { GM_setValue && GM_setValue(NEXT_FILE_TIMEOUT_KEY, normalizedMinutes); } catch (e) {}
+        localStorage.setItem(NEXT_FILE_TIMEOUT_KEY, String(normalizedMinutes));
+        return normalizedMinutes;
+    }
+
+    function getNextFileTimeoutMs() {
+        return getNextFileTimeoutMinutes() * 60 * 1000;
     }
 
     function normalizeAutoSignState(state) {
@@ -322,6 +361,8 @@
         const disabledHint = document.querySelector('div[data-auto-sign-settings-running-hint]');
         const queryIntervalDecrease = document.querySelector('button[data-auto-sign-query-interval-decrease]');
         const queryIntervalIncrease = document.querySelector('button[data-auto-sign-query-interval-increase]');
+        const nextFileTimeoutDecrease = document.querySelector('button[data-auto-sign-next-file-timeout-decrease]');
+        const nextFileTimeoutIncrease = document.querySelector('button[data-auto-sign-next-file-timeout-increase]');
         updateSignPositionButtons();
         if (queryIntervalDecrease) {
             queryIntervalDecrease.disabled = running === true;
@@ -332,6 +373,16 @@
             queryIntervalIncrease.disabled = running === true;
             queryIntervalIncrease.style.opacity = running ? '0.55' : '1';
             queryIntervalIncrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (nextFileTimeoutDecrease) {
+            nextFileTimeoutDecrease.disabled = running === true;
+            nextFileTimeoutDecrease.style.opacity = running ? '0.55' : '1';
+            nextFileTimeoutDecrease.style.cursor = running ? 'not-allowed' : 'pointer';
+        }
+        if (nextFileTimeoutIncrease) {
+            nextFileTimeoutIncrease.disabled = running === true;
+            nextFileTimeoutIncrease.style.opacity = running ? '0.55' : '1';
+            nextFileTimeoutIncrease.style.cursor = running ? 'not-allowed' : 'pointer';
         }
         if (disabledHint) {
             disabledHint.style.display = running ? 'block' : 'none';
@@ -385,6 +436,8 @@
         panel.style.fontSize = '13px';
         panel.style.color = '#303133';
         panel.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        panel.style.maxHeight = 'calc(100vh - 70px)';
+        panel.style.overflowY = 'auto';
 
         const positionSection = document.createElement('div');
         positionSection.style.padding = '10px';
@@ -404,7 +457,7 @@
         positionGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
         positionGrid.style.gap = '6px';
 
-        SIGN_POSITION_OPTIONS.forEach(option => {
+        const createPositionButton = option => {
             const item = document.createElement('button');
             item.setAttribute('data-auto-sign-position-option', 'true');
             item.dataset.value = option.value;
@@ -418,11 +471,20 @@
                 updateSignPositionButtons();
                 setStatus(`已选择签字位置：${option.label}`);
             };
-            positionGrid.appendChild(item);
+            return item;
+        };
+
+        SIGN_POSITION_OPTIONS.forEach(option => {
+            positionGrid.appendChild(createPositionButton(option));
         });
+
+        const randomPositionButton = createPositionButton(RANDOM_SIGN_POSITION_OPTION);
+        randomPositionButton.style.marginTop = '8px';
+        randomPositionButton.style.width = '100%';
 
         positionSection.appendChild(label);
         positionSection.appendChild(positionGrid);
+        positionSection.appendChild(randomPositionButton);
 
         const querySection = document.createElement('div');
         querySection.style.marginTop = '10px';
@@ -440,12 +502,14 @@
         const queryIntervalRow = document.createElement('div');
         queryIntervalRow.style.display = 'flex';
         queryIntervalRow.style.alignItems = 'center';
+        queryIntervalRow.style.justifyContent = 'center';
         queryIntervalRow.style.gap = '8px';
+        queryIntervalRow.style.width = '100%';
 
         const queryIntervalDecrease = document.createElement('button');
         queryIntervalDecrease.setAttribute('data-auto-sign-query-interval-decrease', 'true');
         queryIntervalDecrease.innerText = '-';
-        queryIntervalDecrease.style.width = '32px';
+        queryIntervalDecrease.style.width = '44px';
         queryIntervalDecrease.style.height = '30px';
         queryIntervalDecrease.style.border = '1px solid #dcdfe6';
         queryIntervalDecrease.style.borderRadius = '6px';
@@ -456,7 +520,7 @@
         const queryIntervalValue = document.createElement('span');
         queryIntervalValue.setAttribute('data-auto-sign-query-interval-value', 'true');
         queryIntervalValue.style.display = 'inline-block';
-        queryIntervalValue.style.minWidth = '64px';
+        queryIntervalValue.style.minWidth = '96px';
         queryIntervalValue.style.height = '30px';
         queryIntervalValue.style.lineHeight = '30px';
         queryIntervalValue.style.textAlign = 'center';
@@ -469,7 +533,7 @@
         const queryIntervalIncrease = document.createElement('button');
         queryIntervalIncrease.setAttribute('data-auto-sign-query-interval-increase', 'true');
         queryIntervalIncrease.innerText = '+';
-        queryIntervalIncrease.style.width = '32px';
+        queryIntervalIncrease.style.width = '44px';
         queryIntervalIncrease.style.height = '30px';
         queryIntervalIncrease.style.border = '1px solid #dcdfe6';
         queryIntervalIncrease.style.borderRadius = '6px';
@@ -507,6 +571,92 @@
         querySection.appendChild(queryLabel);
         querySection.appendChild(queryIntervalRow);
         querySection.appendChild(queryHelp);
+
+        const timeoutSection = document.createElement('div');
+        timeoutSection.style.marginTop = '10px';
+        timeoutSection.style.padding = '10px';
+        timeoutSection.style.border = '1px solid #ebeef5';
+        timeoutSection.style.borderRadius = '8px';
+        timeoutSection.style.backgroundColor = '#fff';
+
+        const timeoutLabel = document.createElement('div');
+        timeoutLabel.innerText = '文件加载超时';
+        timeoutLabel.style.marginBottom = '8px';
+        timeoutLabel.style.fontWeight = '700';
+        timeoutLabel.style.color = '#303133';
+
+        const timeoutRow = document.createElement('div');
+        timeoutRow.style.display = 'flex';
+        timeoutRow.style.alignItems = 'center';
+        timeoutRow.style.justifyContent = 'center';
+        timeoutRow.style.gap = '8px';
+        timeoutRow.style.width = '100%';
+
+        const timeoutDecrease = document.createElement('button');
+        timeoutDecrease.setAttribute('data-auto-sign-next-file-timeout-decrease', 'true');
+        timeoutDecrease.innerText = '-';
+        timeoutDecrease.style.width = '44px';
+        timeoutDecrease.style.height = '30px';
+        timeoutDecrease.style.border = '1px solid #dcdfe6';
+        timeoutDecrease.style.borderRadius = '6px';
+        timeoutDecrease.style.backgroundColor = '#fff';
+        timeoutDecrease.style.cursor = 'pointer';
+        timeoutDecrease.style.fontWeight = '700';
+
+        const timeoutValue = document.createElement('span');
+        timeoutValue.setAttribute('data-auto-sign-next-file-timeout-value', 'true');
+        timeoutValue.style.display = 'inline-block';
+        timeoutValue.style.minWidth = '96px';
+        timeoutValue.style.height = '30px';
+        timeoutValue.style.lineHeight = '30px';
+        timeoutValue.style.textAlign = 'center';
+        timeoutValue.style.border = '1px solid #dcdfe6';
+        timeoutValue.style.borderRadius = '6px';
+        timeoutValue.style.backgroundColor = '#f5f7fa';
+        timeoutValue.style.fontWeight = '700';
+        timeoutValue.style.color = '#1f2d3d';
+
+        const timeoutIncrease = document.createElement('button');
+        timeoutIncrease.setAttribute('data-auto-sign-next-file-timeout-increase', 'true');
+        timeoutIncrease.innerText = '+';
+        timeoutIncrease.style.width = '44px';
+        timeoutIncrease.style.height = '30px';
+        timeoutIncrease.style.border = '1px solid #dcdfe6';
+        timeoutIncrease.style.borderRadius = '6px';
+        timeoutIncrease.style.backgroundColor = '#fff';
+        timeoutIncrease.style.cursor = 'pointer';
+        timeoutIncrease.style.fontWeight = '700';
+
+        const updateTimeoutValue = () => {
+            timeoutValue.innerText = `${getNextFileTimeoutMinutes()} 分钟`;
+        };
+        const changeTimeout = step => {
+            if (isAutoSignRunningState()) {
+                setStatus('运行中：停止后才能修改文件加载超时');
+                return;
+            }
+            const minutes = setNextFileTimeoutMinutes(getNextFileTimeoutMinutes() + step);
+            timeoutValue.innerText = `${minutes} 分钟`;
+            setStatus(`已设置文件加载超时：${minutes} 分钟`);
+        };
+        timeoutDecrease.onclick = () => changeTimeout(-1);
+        timeoutIncrease.onclick = () => changeTimeout(1);
+        updateTimeoutValue();
+
+        timeoutRow.appendChild(timeoutDecrease);
+        timeoutRow.appendChild(timeoutValue);
+        timeoutRow.appendChild(timeoutIncrease);
+
+        const timeoutHelp = document.createElement('div');
+        timeoutHelp.innerText = '切换下一个文件后，等待画布和签名模块加载的最长时间；网速慢可调大。';
+        timeoutHelp.style.marginTop = '8px';
+        timeoutHelp.style.fontSize = '12px';
+        timeoutHelp.style.color = '#606266';
+        timeoutHelp.style.lineHeight = '1.4';
+
+        timeoutSection.appendChild(timeoutLabel);
+        timeoutSection.appendChild(timeoutRow);
+        timeoutSection.appendChild(timeoutHelp);
 
         const disabledHint = document.createElement('div');
         disabledHint.setAttribute('data-auto-sign-settings-running-hint', 'true');
@@ -558,6 +708,7 @@
 
         panel.appendChild(positionSection);
         panel.appendChild(querySection);
+        panel.appendChild(timeoutSection);
         panel.appendChild(feedbackSection);
         panel.appendChild(disabledHint);
         document.body.appendChild(panel);
@@ -630,7 +781,8 @@
                     processStarted,
                     manualStopped,
                     batchSubmitted: sessionStorage.getItem(BATCH_SUBMITTED_KEY) === 'true',
-                    queryIntervalSeconds: getQueryIntervalSeconds()
+                    queryIntervalSeconds: getQueryIntervalSeconds(),
+                    nextFileTimeoutMinutes: getNextFileTimeoutMinutes()
                 }
             });
             sessionStorage.setItem(AUTO_SIGN_LOG_KEY, JSON.stringify(logs.slice(-300)));
@@ -664,13 +816,14 @@
             const lines = [
                 'Autosign 问题日志',
                 `导出时间：${new Date().toLocaleString()}`,
-                '脚本版本：1.1.8',
+                '脚本版本：1.1.9',
                 `当前页面：${getSafeLogUrl()}`,
                 `页面类型：${getPageTypeForLog()}`,
                 `浏览器：${navigator.userAgent}`,
                 `运行状态：${getAutoSignState()}`,
                 `签章位置：${getSignPositionLabel(getSignPositionMode())}`,
                 `查询间隔：${getQueryIntervalSeconds()} 秒`,
+                `文件加载超时：${getNextFileTimeoutMinutes()} 分钟`,
                 `批次已提交标记：${hasSubmittedBatchOnce() ? '是' : '否'}`,
                 '',
                 '最近日志：',
@@ -721,34 +874,52 @@
         } catch (e) {}
     }
 
-    // 计算签名位置
-    function calculateSignPosition(canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const mode = getSignPositionMode();
-        const marginX = rect.width * 0.1;
-        const marginY = rect.height * 0.1;
+    function calculateFixedSignPosition(rect, mode, marginX, marginY) {
         if (mode === 'top-left') {
             return { x: rect.left + marginX, y: rect.top + marginY };
+        }
+        if (mode === 'top-center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + marginY };
         }
         if (mode === 'bottom-left') {
             return { x: rect.left + marginX, y: rect.bottom - marginY };
         }
+        if (mode === 'bottom-center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.bottom - marginY };
+        }
         if (mode === 'bottom-right') {
             return { x: rect.right - marginX, y: rect.bottom - marginY };
         }
-        if (mode === 'center') {
-            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.25) };
+        if (mode === 'middle-left') {
+            return { x: rect.left + marginX, y: rect.top + (rect.height * 0.5) };
         }
-        if (mode === 'random') {
-            return {
-                x: rect.left + marginX + (Math.random() * (rect.width - marginX * 2)),
-                y: rect.top + marginY + (Math.random() * (rect.height - marginY * 2))
-            };
+        if (mode === 'center') {
+            return { x: rect.left + (rect.width * 0.5), y: rect.top + (rect.height * 0.5) };
+        }
+        if (mode === 'middle-right') {
+            return { x: rect.right - marginX, y: rect.top + (rect.height * 0.5) };
         }
         return {
-            x: rect.right - (rect.width * 0.1), // 右上角，距离右边缘 10%
-            y: rect.top + (rect.height * 0.1)   // 右上角，距离上边缘 10%
+            x: rect.right - marginX,
+            y: rect.top + marginY
         };
+    }
+
+    // 计算签名位置
+    function calculateSignPosition(canvas) {
+        const rect = canvas.getBoundingClientRect();
+        let mode = getSignPositionMode();
+        const marginX = rect.width * 0.05;
+        const marginY = rect.height * 0.05;
+        if (mode === 'random') {
+            mode = RANDOM_SIGN_POSITION_MODES[Math.floor(Math.random() * RANDOM_SIGN_POSITION_MODES.length)];
+            const randomSignPositionSelected = mode;
+            addAutoSignEvent('random_sign_position', {
+                selectedMode: randomSignPositionSelected,
+                selectedLabel: getSignPositionLabel(randomSignPositionSelected)
+            }, 'info');
+        }
+        return calculateFixedSignPosition(rect, mode, marginX, marginY);
     }
 
     // 模拟鼠标点击（不依赖 view; 依次派发 pointer/mouse 序列）
@@ -954,6 +1125,7 @@
         const list = Array.isArray(selectors) ? selectors : [selectors];
         const start = Date.now();
         while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return false;
             let allReady = true;
             for (const sel of list) {
                 const el = document.querySelector(sel);
@@ -1422,9 +1594,13 @@
             setStatus('正在查找电子签章入口...');
             const signButton = await findSignButton();
             if (!signButton) {
-                console.log('未找到电子签章按钮，停止流程');
-                setStatus('未找到电子签章入口，请刷新页面后重试');
-                return false;
+                console.log('未找到电子签章按钮，按无电子签章待办处理并停止流程');
+                addAutoSignEvent('todo_no_sign_entry', {
+                    pageType: getPageTypeForLog()
+                }, 'info');
+                stopProcess(true);
+                setStatus('没有电子签章待办，已停止', 'idle');
+                return true;
             }
 
             // 2. 点击电子签章按钮
@@ -1522,7 +1698,7 @@
     async function handleSignaturePage() {
         try {
             console.log('开始签名页面处理流程');
-            setStatus('正在等待签章页面加载...');
+            setStatus('正在等待画布和签名模块加载...');
 
             while (isRunning && !manualStopped) {
                 // 执行签名流程
@@ -1534,6 +1710,9 @@
                         signedOk = true;
                         setStatus('当前文件签名成功，准备处理下一个...');
                         break;
+                    }
+                    if (!isRunning || manualStopped) {
+                        return;
                     }
                     console.log('签名失败，准备重试第', attempt, '次');
                     setStatus('签名失败，正在重试...');
@@ -1559,7 +1738,7 @@
                 }
 
                 // 切换到下一个文件（仅以签名流程返回成功为依据，不再依赖列表图标类）
-                setStatus('正在切换下一个待签文件...');
+                setStatus('正在切换下一个待签文件，等待画布和签名模块加载...');
                 const hasNextFile = await clickNextFile();
 
                 if (hasNextFile) {
@@ -1611,11 +1790,60 @@
         return !!selectedEl;
     }
 
-    async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = NEXT_FILE_READY_TIMEOUT) {
+    function getFileItemName(file) {
+        return file?.querySelector(SELECTORS.fileTitle)?.textContent?.trim() || '未知文件';
+    }
+
+    function isLocallySignedFile(file) {
+        return file?.getAttribute(LOCAL_SIGNED_FILE_ATTR) === 'true';
+    }
+
+    function clearLocalSignedFileMarkers() {
+        document.querySelectorAll(`[${LOCAL_SIGNED_FILE_ATTR}="true"]`).forEach(file => {
+            file.removeAttribute(LOCAL_SIGNED_FILE_ATTR);
+        });
+        currentProcessingFile = null;
+    }
+
+    function setCurrentProcessingFile(file, source) {
+        currentProcessingFile = file || null;
+        if (file) {
+            addAutoSignEvent('current_processing_file', {
+                source,
+                fileName: getFileItemName(file)
+            }, 'info');
+        }
+    }
+
+    function getCurrentProcessingFile() {
+        if (currentProcessingFile && document.documentElement.contains(currentProcessingFile)) {
+            return currentProcessingFile;
+        }
+        currentProcessingFile = null;
+        return null;
+    }
+
+    function markSelectedFileSignedLocally() {
+        const selectedFile = getCurrentProcessingFile() || Array.from(document.querySelectorAll(SELECTORS.fileListItem)).find(file => isFileItemSelected(file));
+        if (!selectedFile) {
+            addAutoSignEvent('local_file_signed_missing_selected', {}, 'warn');
+            return;
+        }
+        selectedFile.setAttribute(LOCAL_SIGNED_FILE_ATTR, 'true');
+        addAutoSignEvent('local_file_signed', {
+            fileName: getFileItemName(selectedFile)
+        }, 'info');
+        currentProcessingFile = null;
+    }
+
+    async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = getNextFileTimeoutMs()) {
         const start = Date.now();
         let readySince = null;
         let lastSnapshotAt = 0;
-        addAutoSignEvent('next_file_wait_start', { timeout }, 'info');
+        addAutoSignEvent('next_file_wait_start', {
+            timeout,
+            timeoutMinutes: getNextFileTimeoutMinutes()
+        }, 'info');
 
         while (Date.now() - start < timeout) {
             if (!isRunning || manualStopped) return false;
@@ -1623,7 +1851,6 @@
             await waitForLoadingGone(3000);
             const canvas = document.querySelector(SELECTORS.signatureCanvas);
             const signatureModule = document.querySelector(SELECTORS.signatureModule);
-            const selected = isFileItemSelected(targetFile);
             const canvasReady = !!canvas && isElementVisible(canvas);
             const signatureReady = !!signatureModule && isElementVisible(signatureModule);
             const canvasChangedOrStable = !previousCanvas || canvas !== previousCanvas || Date.now() - start >= 800;
@@ -1631,22 +1858,20 @@
             if (Date.now() - lastSnapshotAt >= 10000) {
                 addAutoSignEvent('next_file_wait_snapshot', {
                     elapsedMs: Date.now() - start,
-                    selected,
                     canvasReady,
                     signatureReady,
                     canvasChangedOrStable
-                }, selected && canvasReady && signatureReady ? 'info' : 'warn');
+                }, canvasReady && signatureReady ? 'info' : 'warn');
                 lastSnapshotAt = Date.now();
             }
 
-            if (selected && canvasReady && signatureReady && canvasChangedOrStable) {
+            if (canvasReady && signatureReady && canvasChangedOrStable) {
                 if (readySince === null) {
                     readySince = Date.now();
                 }
                 if (Date.now() - readySince >= 300) {
                     addAutoSignEvent('next_file_ready', {
                         elapsedMs: Date.now() - start,
-                        selected,
                         canvasChanged: !!previousCanvas && canvas !== previousCanvas
                     }, 'info');
                     return true;
@@ -1658,7 +1883,10 @@
             await new Promise(r => setTimeout(r, 100));
         }
 
-        addAutoSignEvent('next_file_timeout', { timeout }, 'error');
+        addAutoSignEvent('next_file_timeout', {
+            timeout,
+            timeoutMinutes: getNextFileTimeoutMinutes()
+        }, 'error');
         return false;
     }
 
@@ -1679,8 +1907,14 @@
             for (let file of fileList) {
                 const pendingStatus = file.querySelector(SELECTORS.pendingStatus);
                 if (pendingStatus) {
+                    if (isLocallySignedFile(file)) {
+                        addAutoSignEvent('skip_locally_signed_file', {
+                            fileName: getFileItemName(file)
+                        }, 'warn');
+                        continue;
+                    }
                     targetFile = file;
-                    targetFileName = file.querySelector(SELECTORS.fileTitle)?.textContent?.trim() || '未知文件';
+                    targetFileName = getFileItemName(file);
                     break;
                 }
             }
@@ -1689,12 +1923,13 @@
                 console.log('找到第一个待签署文件:', targetFileName);
                 setStatus(`正在处理待签文件：${targetFileName}`);
                 const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
+                setCurrentProcessingFile(targetFile, 'click_next_file');
                 targetFile.querySelector(SELECTORS.fileTitle)?.click();
                 console.log('切换到待签署文件，等待页面就绪...');
                 setStatus('正在切换下一个待签文件，等待页面就绪...');
-                const ready = await waitForNextFileReady(targetFile, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                const ready = await waitForNextFileReady(targetFile, previousCanvas);
                 if (!ready) {
-                    notifyAttention('切换待签文件超过 2 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。');
+                    notifyAttention(`切换待签文件超过 ${getNextFileTimeoutMinutes()} 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。`);
                     stopProcess(true);
                     return null;
                 }
@@ -1722,6 +1957,13 @@
             const pendingFiles = [];
             for (let file of fileList) {
                 if (file.querySelector(SELECTORS.pendingStatus)) {
+                    if (isLocallySignedFile(file)) {
+                        addAutoSignEvent('skip_locally_signed_file', {
+                            fileName: getFileItemName(file),
+                            source: 'detection_flow'
+                        }, 'warn');
+                        continue;
+                    }
                     pendingFiles.push(file);
                 }
             }
@@ -1736,8 +1978,9 @@
                     console.log('检测待签署文件:', name);
                     setStatus(`正在复查文件：${name}`);
                     const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
+                    setCurrentProcessingFile(file, 'detection_flow');
                     titleEl?.click();
-                    const ready = await waitForNextFileReady(file, previousCanvas, NEXT_FILE_READY_TIMEOUT);
+                    const ready = await waitForNextFileReady(file, previousCanvas);
                     if (!ready) {
                         console.log('检测流程：切换待签文件超时');
                         setStatus('切换待签文件超时，请检查页面加载状态');
@@ -1830,14 +2073,21 @@
             setStatus('正在准备签署当前文件...');
             
             // 签名页只负责执行当前待签文件；是否待签以列表状态为准。
-            console.log('等待画布可见 (无限等待)...');
-            setStatus('正在等待签章页面加载...');
-            const canvasNow = await waitForElementNoTimeout(SELECTORS.signatureCanvas, true);
-            if (!canvasNow) {
-                console.log('等待被中断（停止或手动停止）');
-                setStatus('签章流程已停止');
+            console.log('等待画布和签名模块可见...');
+            setStatus('正在等待画布和签名模块加载...');
+            const pageReady = await waitForAllVisible([SELECTORS.signatureCanvas, SELECTORS.signatureModule], getNextFileTimeoutMs());
+            if (!pageReady) {
+                if (!isRunning || manualStopped) {
+                    console.log('等待被中断（停止或手动停止）');
+                    setStatus('签章流程已停止');
+                    return false;
+                }
+                console.log('签章页面加载超时');
+                notifyAttention(`签章页面超过 ${getNextFileTimeoutMinutes()} 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。`);
+                stopProcess(true);
                 return false;
             }
+            const canvasNow = document.querySelector(SELECTORS.signatureCanvas);
             await new Promise(r => setTimeout(r, 500));
             
             let signatureModuleNow = document.querySelector(SELECTORS.signatureModule);
@@ -1881,6 +2131,7 @@
             }
 
             setStatus('当前文件签名成功');
+            markSelectedFileSignedLocally();
             return true;
         } catch (error) {
             console.error('签署过程出错:', error);
@@ -1941,6 +2192,7 @@
     let processStarted = false;
     let controlButton = null;
     let manualStopped = false;
+    let currentProcessingFile = null;
     let lastStopLogAt = 0;
     let lastStopLogManual = null;
     // 屏幕常亮 Wake Lock
@@ -2045,6 +2297,7 @@
         const wasAlreadyRunning = isAutoSignRunningState() || sessionStorage.getItem(AUTO_SIGN_STATE_KEY) === AUTO_SIGN_STATES.RUNNING;
         if (!wasAlreadyRunning) {
             resetBatchSubmitted();
+            clearLocalSignedFileMarkers();
         }
         const selectedPosition = getSignPositionMode();
         console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);
