@@ -2,7 +2,7 @@
 
 这是一个用于 PMS 电子签章流程的 Tampermonkey 用户脚本，主要帮助用户自动完成待办进入、批量签章、文件切换、签章确认等重复操作。
 
-![Autosign v1.1.8 使用说明](https://github.com/ka1er/Autosign/releases/download/v1.1.8/autosign-v1.1.8-guide.png)
+![Autosign v1.1.9 使用说明](https://github.com/ka1er/Autosign/releases/download/v1.1.9/autosign-v1.1.9-guide.png)
 
 ## 当前推荐版本
 
