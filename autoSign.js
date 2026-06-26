@@ -22,6 +22,7 @@
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
     const AUTO_SIGN_LOG_KEY = 'autoSignRecentLogs';
+    const LOCAL_SIGNED_FILE_ATTR = 'data-auto-sign-locally-signed';
     const ENTRY_FLOW_READY_TIMEOUT = 120000;
     const AUTO_SIGN_STATES = Object.freeze({
         IDLE: 'idle',
@@ -134,6 +135,7 @@
                 setAutoSignState(AUTO_SIGN_STATES.IDLE);
                 resetBatchSubmitted();
                 resetSignEntryClickedFlags();
+                clearLocalSignedFileMarkers();
                 startProcess();
             }
         };
@@ -434,6 +436,8 @@
         panel.style.fontSize = '13px';
         panel.style.color = '#303133';
         panel.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        panel.style.maxHeight = 'calc(100vh - 70px)';
+        panel.style.overflowY = 'auto';
 
         const positionSection = document.createElement('div');
         positionSection.style.padding = '10px';
@@ -909,6 +913,11 @@
         const marginY = rect.height * 0.05;
         if (mode === 'random') {
             mode = RANDOM_SIGN_POSITION_MODES[Math.floor(Math.random() * RANDOM_SIGN_POSITION_MODES.length)];
+            const randomSignPositionSelected = mode;
+            addAutoSignEvent('random_sign_position', {
+                selectedMode: randomSignPositionSelected,
+                selectedLabel: getSignPositionLabel(randomSignPositionSelected)
+            }, 'info');
         }
         return calculateFixedSignPosition(rect, mode, marginX, marginY);
     }
@@ -1116,6 +1125,7 @@
         const list = Array.isArray(selectors) ? selectors : [selectors];
         const start = Date.now();
         while (Date.now() - start < timeout) {
+            if (!isRunning || manualStopped) return false;
             let allReady = true;
             for (const sel of list) {
                 const el = document.querySelector(sel);
@@ -1688,7 +1698,7 @@
     async function handleSignaturePage() {
         try {
             console.log('开始签名页面处理流程');
-            setStatus('正在等待签章页面加载...');
+            setStatus('正在等待画布和签名模块加载...');
 
             while (isRunning && !manualStopped) {
                 // 执行签名流程
@@ -1700,6 +1710,9 @@
                         signedOk = true;
                         setStatus('当前文件签名成功，准备处理下一个...');
                         break;
+                    }
+                    if (!isRunning || manualStopped) {
+                        return;
                     }
                     console.log('签名失败，准备重试第', attempt, '次');
                     setStatus('签名失败，正在重试...');
@@ -1725,7 +1738,7 @@
                 }
 
                 // 切换到下一个文件（仅以签名流程返回成功为依据，不再依赖列表图标类）
-                setStatus('正在切换下一个待签文件...');
+                setStatus('正在切换下一个待签文件，等待画布和签名模块加载...');
                 const hasNextFile = await clickNextFile();
 
                 if (hasNextFile) {
@@ -1775,6 +1788,52 @@
             '.el-radio__input.is-checked, .el-checkbox__input.is-checked, .el-icon-check, .el-icon-circle-check, .el-icon-success, .is-checked, [aria-checked="true"], [aria-selected="true"]'
         );
         return !!selectedEl;
+    }
+
+    function getFileItemName(file) {
+        return file?.querySelector(SELECTORS.fileTitle)?.textContent?.trim() || '未知文件';
+    }
+
+    function isLocallySignedFile(file) {
+        return file?.getAttribute(LOCAL_SIGNED_FILE_ATTR) === 'true';
+    }
+
+    function clearLocalSignedFileMarkers() {
+        document.querySelectorAll(`[${LOCAL_SIGNED_FILE_ATTR}="true"]`).forEach(file => {
+            file.removeAttribute(LOCAL_SIGNED_FILE_ATTR);
+        });
+        currentProcessingFile = null;
+    }
+
+    function setCurrentProcessingFile(file, source) {
+        currentProcessingFile = file || null;
+        if (file) {
+            addAutoSignEvent('current_processing_file', {
+                source,
+                fileName: getFileItemName(file)
+            }, 'info');
+        }
+    }
+
+    function getCurrentProcessingFile() {
+        if (currentProcessingFile && document.documentElement.contains(currentProcessingFile)) {
+            return currentProcessingFile;
+        }
+        currentProcessingFile = null;
+        return null;
+    }
+
+    function markSelectedFileSignedLocally() {
+        const selectedFile = getCurrentProcessingFile() || Array.from(document.querySelectorAll(SELECTORS.fileListItem)).find(file => isFileItemSelected(file));
+        if (!selectedFile) {
+            addAutoSignEvent('local_file_signed_missing_selected', {}, 'warn');
+            return;
+        }
+        selectedFile.setAttribute(LOCAL_SIGNED_FILE_ATTR, 'true');
+        addAutoSignEvent('local_file_signed', {
+            fileName: getFileItemName(selectedFile)
+        }, 'info');
+        currentProcessingFile = null;
     }
 
     async function waitForNextFileReady(targetFile, previousCanvas = null, timeout = getNextFileTimeoutMs()) {
@@ -1848,8 +1907,14 @@
             for (let file of fileList) {
                 const pendingStatus = file.querySelector(SELECTORS.pendingStatus);
                 if (pendingStatus) {
+                    if (isLocallySignedFile(file)) {
+                        addAutoSignEvent('skip_locally_signed_file', {
+                            fileName: getFileItemName(file)
+                        }, 'warn');
+                        continue;
+                    }
                     targetFile = file;
-                    targetFileName = file.querySelector(SELECTORS.fileTitle)?.textContent?.trim() || '未知文件';
+                    targetFileName = getFileItemName(file);
                     break;
                 }
             }
@@ -1858,6 +1923,7 @@
                 console.log('找到第一个待签署文件:', targetFileName);
                 setStatus(`正在处理待签文件：${targetFileName}`);
                 const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
+                setCurrentProcessingFile(targetFile, 'click_next_file');
                 targetFile.querySelector(SELECTORS.fileTitle)?.click();
                 console.log('切换到待签署文件，等待页面就绪...');
                 setStatus('正在切换下一个待签文件，等待页面就绪...');
@@ -1891,6 +1957,13 @@
             const pendingFiles = [];
             for (let file of fileList) {
                 if (file.querySelector(SELECTORS.pendingStatus)) {
+                    if (isLocallySignedFile(file)) {
+                        addAutoSignEvent('skip_locally_signed_file', {
+                            fileName: getFileItemName(file),
+                            source: 'detection_flow'
+                        }, 'warn');
+                        continue;
+                    }
                     pendingFiles.push(file);
                 }
             }
@@ -1905,6 +1978,7 @@
                     console.log('检测待签署文件:', name);
                     setStatus(`正在复查文件：${name}`);
                     const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
+                    setCurrentProcessingFile(file, 'detection_flow');
                     titleEl?.click();
                     const ready = await waitForNextFileReady(file, previousCanvas);
                     if (!ready) {
@@ -1999,14 +2073,21 @@
             setStatus('正在准备签署当前文件...');
             
             // 签名页只负责执行当前待签文件；是否待签以列表状态为准。
-            console.log('等待画布可见 (无限等待)...');
-            setStatus('正在等待签章页面加载...');
-            const canvasNow = await waitForElementNoTimeout(SELECTORS.signatureCanvas, true);
-            if (!canvasNow) {
-                console.log('等待被中断（停止或手动停止）');
-                setStatus('签章流程已停止');
+            console.log('等待画布和签名模块可见...');
+            setStatus('正在等待画布和签名模块加载...');
+            const pageReady = await waitForAllVisible([SELECTORS.signatureCanvas, SELECTORS.signatureModule], getNextFileTimeoutMs());
+            if (!pageReady) {
+                if (!isRunning || manualStopped) {
+                    console.log('等待被中断（停止或手动停止）');
+                    setStatus('签章流程已停止');
+                    return false;
+                }
+                console.log('签章页面加载超时');
+                notifyAttention(`签章页面超过 ${getNextFileTimeoutMinutes()} 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。`);
+                stopProcess(true);
                 return false;
             }
+            const canvasNow = document.querySelector(SELECTORS.signatureCanvas);
             await new Promise(r => setTimeout(r, 500));
             
             let signatureModuleNow = document.querySelector(SELECTORS.signatureModule);
@@ -2050,6 +2131,7 @@
             }
 
             setStatus('当前文件签名成功');
+            markSelectedFileSignedLocally();
             return true;
         } catch (error) {
             console.error('签署过程出错:', error);
@@ -2110,6 +2192,7 @@
     let processStarted = false;
     let controlButton = null;
     let manualStopped = false;
+    let currentProcessingFile = null;
     let lastStopLogAt = 0;
     let lastStopLogManual = null;
     // 屏幕常亮 Wake Lock
@@ -2214,6 +2297,7 @@
         const wasAlreadyRunning = isAutoSignRunningState() || sessionStorage.getItem(AUTO_SIGN_STATE_KEY) === AUTO_SIGN_STATES.RUNNING;
         if (!wasAlreadyRunning) {
             resetBatchSubmitted();
+            clearLocalSignedFileMarkers();
         }
         const selectedPosition = getSignPositionMode();
         console.log('本次运行签字位置:', getSignPositionLabel(selectedPosition), selectedPosition);

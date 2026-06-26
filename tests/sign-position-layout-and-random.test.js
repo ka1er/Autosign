@@ -35,5 +35,9 @@ assert(!source.includes('Math.random() * (rect.height - marginY * 2)'), 'random 
 assert(source.includes('const marginX = rect.width * 0.05;'), 'horizontal edge margin should be 5 percent');
 assert(source.includes('const marginY = rect.height * 0.05;'), 'vertical edge margin should be 5 percent');
 assert(source.includes("randomPositionButton.style.width = '100%'"), 'random button should sit below the 3x3 grid');
+assert(source.includes('randomSignPositionSelected'), 'random signing should record the actual selected fixed position');
+assert(source.includes("addAutoSignEvent('random_sign_position'"), 'random signing should add a structured event with the selected position');
+assert(source.includes("panel.style.maxHeight = 'calc(100vh - 70px)'"), 'settings panel should be height-limited for small screens');
+assert(source.includes("panel.style.overflowY = 'auto'"), 'settings panel should scroll when content is taller than the viewport');
 assert(source.includes("queryIntervalRow.style.justifyContent = 'center'"), 'query interval row should be centered');
 assert(source.includes("timeoutRow.style.justifyContent = 'center'"), 'file timeout row should be centered');
