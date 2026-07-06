@@ -1756,7 +1756,7 @@
         }, 'info');
 
         while (Date.now() - start < timeout) {
-            if (!isRunning || manualStopped) return false;
+            if (!isRunning || manualStopped) return null;
 
             await waitForLoadingGone(3000);
             const canvas = document.querySelector(SELECTORS.signatureCanvas);
@@ -1831,11 +1831,12 @@
                 console.log('切换到待签署文件，等待页面就绪...');
                 setStatus('正在切换下一个待签文件，等待页面就绪...');
                 const ready = await waitForNextFileReady(targetFile, previousCanvas);
-                if (!ready) {
+                if (ready === false) {
                     notifyAttention(`切换待签文件超过 ${getNextFileTimeoutMinutes()} 分钟仍未加载完成，请检查网络、页面加载状态或浏览器弹窗权限。`);
                     stopProcess(true);
                     return null;
                 }
+                if (ready === null) return null;
                 return true;
             }
 
@@ -1876,12 +1877,13 @@
                     const previousCanvas = document.querySelector(SELECTORS.signatureCanvas);
                     titleEl?.click();
                     const ready = await waitForNextFileReady(file, previousCanvas);
-                    if (!ready) {
+                    if (ready === false) {
                         console.log('检测流程：切换待签文件超时');
                         setStatus('切换待签文件超时，请检查页面加载状态');
                         return false;
                     }
 
+                    if (ready === null) return false;
                     // 文件是否待签以列表 pending 状态为准；控件缺失视为异常，不再推断为已签。
                     const canvas = await waitForElement(SELECTORS.signatureCanvas, 5000, true);
                     if (!canvas) {
