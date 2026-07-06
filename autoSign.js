@@ -21,6 +21,8 @@
     const AUTO_SIGN_STATE_KEY = 'autoSignState';
     const MANUAL_STOP_KEY = 'autoSignManualStopped';
     const BATCH_SUBMITTED_KEY = 'autoSignBatchSubmittedOnce';
+    const SIGNATURE_ACTIVE_KEY = 'autoSignSignatureActive';
+    const SIGNATURE_DONE_AT_KEY = 'autoSignSignatureDoneAt';
     const AUTO_SIGN_LOG_KEY = 'autoSignRecentLogs';
     const ENTRY_FLOW_READY_TIMEOUT = 120000;
     const AUTO_SIGN_STATES = Object.freeze({
@@ -2207,7 +2209,15 @@
         // 检查是否是签名页面
         if (window.location.href.includes('pageseal/signature')) {
             console.log('在签名页面启动流程');
-            runProcessHandler(handleSignaturePage, '签名页面流程');
+            try { GM_setValue && GM_setValue(SIGNATURE_ACTIVE_KEY, true); } catch (e) {}
+            Promise.resolve()
+                .then(handleSignaturePage)
+                .catch(error => { console.error('签名页面流程执行出错:', error); })
+                .finally(() => {
+                    try { GM_setValue && GM_setValue(SIGNATURE_ACTIVE_KEY, false); } catch (e) {}
+                    try { GM_setValue && GM_setValue(SIGNATURE_DONE_AT_KEY, Date.now()); } catch (e) {}
+                    processStarted = false;
+                });
             return;
         }
 
@@ -2217,15 +2227,30 @@
             case 'todoList':
                 runProcessHandler(initializeProcess, '待办页面初始化流程');
                 return; // 添加这一行，避免继续执行
-            case 'librarySignature':
-                if (hasSubmittedBatchOnce()) {
-                    console.log('本批次已提交批量签章，不自动启动。请手动点击运行开始下一批。');
-                    setStatus('请点击运行开始下一批', 'idle');
-                    updateRunningState(false, true, AUTO_SIGN_STATES.IDLE);
+            case 'librarySignature': {
+                // 签名页优先：签名页正在运行时，批量签章页不抢占
+                let sigActive = false;
+                try { sigActive = GM_getValue && GM_getValue(SIGNATURE_ACTIVE_KEY); } catch (e) {}
+                if (sigActive) {
+                    console.log('签名页面正在运行，批量签章页等待');
+                    processStarted = false;
                     return;
                 }
-                runProcessHandler(handleBatchSignaturePage, '批量签章页面流程');
+
+                // 自动跳转回来（8秒内）：允许自动触发下一批
+                let sigDoneAt = 0;
+                try { sigDoneAt = GM_getValue && GM_getValue(SIGNATURE_DONE_AT_KEY) || 0; } catch (e) {}
+                const justReturned = sigDoneAt && (Date.now() - sigDoneAt < 8000);
+
+                if (!hasSubmittedBatchOnce() || justReturned) {
+                    runProcessHandler(handleBatchSignaturePage, '批量签章页面流程');
+                } else {
+                    console.log('已提交过批次且非自动跳转，不自动触发批量签章');
+                    setStatus('请点击运行开始下一批', 'idle');
+                    updateRunningState(false, true, AUTO_SIGN_STATES.IDLE);
+                }
                 break;
+            }
             default:
                 console.log('未知页面类型');
                 processStarted = false;
