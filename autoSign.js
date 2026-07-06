@@ -2218,6 +2218,12 @@
                 runProcessHandler(initializeProcess, '待办页面初始化流程');
                 return; // 添加这一行，避免继续执行
             case 'librarySignature':
+                if (hasSubmittedBatchOnce()) {
+                    console.log('本批次已提交批量签章，不自动启动。请手动点击运行开始下一批。');
+                    setStatus('请点击运行开始下一批', 'idle');
+                    updateRunningState(false, true, AUTO_SIGN_STATES.IDLE);
+                    return;
+                }
                 runProcessHandler(handleBatchSignaturePage, '批量签章页面流程');
                 break;
             default:
