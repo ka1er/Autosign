@@ -169,10 +169,9 @@
             statusBadge.style.borderRadius = '999px';
             statusBadge.style.fontSize = '12px';
             statusBadge.style.fontWeight = '600';
-            statusBadge.style.whiteSpace = 'nowrap';
-            statusBadge.style.maxWidth = '280px';
-            statusBadge.style.overflow = 'hidden';
-            statusBadge.style.textOverflow = 'ellipsis';
+            statusBadge.style.whiteSpace = 'normal';
+            statusBadge.style.maxWidth = 'min(460px, calc(100vw - 220px))';
+            statusBadge.style.lineHeight = '1.4';
             const statusDot = document.createElement('span');
             statusDot.setAttribute('data-auto-sign-status-dot', 'true');
             statusDot.style.width = '7px';
@@ -181,8 +180,7 @@
             statusDot.style.flex = '0 0 auto';
             const statusText = document.createElement('span');
             statusText.setAttribute('data-auto-sign-status-text', 'true');
-            statusText.style.overflow = 'hidden';
-            statusText.style.textOverflow = 'ellipsis';
+            statusText.style.overflowWrap = 'anywhere';
             statusText.innerText = '就绪';
             statusBadge.appendChild(statusDot);
             statusBadge.appendChild(statusText);
@@ -313,12 +311,217 @@
         return rect.width > 0 && rect.height > 0 ? rect.width / rect.height : null;
     }
 
+    function formatTemplatePageLabel(template) {
+        if (!template) return '未选择模板';
+        return template.anchor === 'from-end'
+            ? `倒数第 ${template.offset} 页`
+            : `从头第 ${template.offset} 页`;
+    }
+
+    function removePositionTemplateReview() {
+        document.querySelector('div[data-auto-sign-template-review]')?.remove();
+    }
+
+    function persistPositionTemplate(template) {
+        const normalized = normalizePositionTemplate(template);
+        if (!normalized) return null;
+        const templates = getSignPositionTemplates().filter(item => {
+            return item.id !== normalized.id && item.name !== normalized.name;
+        });
+        templates.push(normalized);
+        setSignPositionTemplates(templates);
+        setActiveSignPositionTemplateId(normalized.id);
+        setSignPlacementMode(SIGN_PLACEMENT_MODES.TEMPLATE);
+        return normalized;
+    }
+
+    function openPositionTemplateReview(template, options = {}) {
+        const normalized = normalizePositionTemplate(template);
+        if (!normalized) {
+            setStatus('模板数据无效，请重新学习', 'error');
+            return false;
+        }
+        removePositionTemplateReview();
+
+        const review = document.createElement('div');
+        review.setAttribute('data-auto-sign-template-review', 'true');
+        review.style.position = 'fixed';
+        review.style.top = '54px';
+        review.style.left = '10px';
+        review.style.zIndex = '10001';
+        review.style.width = '300px';
+        review.style.padding = '14px';
+        review.style.backgroundColor = '#fff';
+        review.style.border = '1px solid #dcdfe6';
+        review.style.borderRadius = '8px';
+        review.style.boxShadow = '0 12px 28px rgba(31,45,61,0.2)';
+        review.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        review.style.fontSize = '13px';
+        review.style.color = '#303133';
+
+        const title = document.createElement('div');
+        title.innerText = options.learning ? '确认位置模板' : '修改名称和页码';
+        title.style.fontWeight = '700';
+        title.style.fontSize = '14px';
+        title.style.marginBottom = '10px';
+
+        const detected = document.createElement('div');
+        if (options.learning && options.pageNumber && options.totalPages) {
+            detected.innerText = `检测位置：第 ${options.pageNumber} / ${options.totalPages} 页`;
+            detected.style.marginBottom = '8px';
+            detected.style.padding = '7px 8px';
+            detected.style.borderRadius = '6px';
+            detected.style.backgroundColor = '#f5f7fa';
+            detected.style.color = '#606266';
+        }
+
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.maxLength = 40;
+        nameInput.value = normalized.name;
+        nameInput.placeholder = '模板名称';
+        nameInput.style.width = '100%';
+        nameInput.style.height = '32px';
+        nameInput.style.padding = '0 8px';
+        nameInput.style.border = '1px solid #dcdfe6';
+        nameInput.style.borderRadius = '6px';
+        nameInput.style.boxSizing = 'border-box';
+
+        const pageRow = document.createElement('div');
+        pageRow.style.display = 'grid';
+        pageRow.style.gridTemplateColumns = '1fr 92px';
+        pageRow.style.gap = '8px';
+        pageRow.style.marginTop = '8px';
+
+        const anchorSelect = document.createElement('select');
+        anchorSelect.style.height = '32px';
+        anchorSelect.style.border = '1px solid #dcdfe6';
+        anchorSelect.style.borderRadius = '6px';
+        anchorSelect.style.padding = '0 8px';
+        [
+            { value: 'from-end', label: '从末页数' },
+            { value: 'from-start', label: '从首页数' }
+        ].forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.value;
+            option.innerText = item.label;
+            option.selected = item.value === normalized.anchor;
+            anchorSelect.appendChild(option);
+        });
+
+        const offsetWrap = document.createElement('div');
+        offsetWrap.style.display = 'flex';
+        offsetWrap.style.alignItems = 'center';
+        offsetWrap.style.gap = '4px';
+        const offsetInput = document.createElement('input');
+        offsetInput.type = 'number';
+        offsetInput.min = '1';
+        offsetInput.step = '1';
+        offsetInput.value = String(normalized.offset);
+        offsetInput.style.width = '62px';
+        offsetInput.style.height = '32px';
+        offsetInput.style.padding = '0 6px';
+        offsetInput.style.border = '1px solid #dcdfe6';
+        offsetInput.style.borderRadius = '6px';
+        offsetInput.style.boxSizing = 'border-box';
+        const pageUnit = document.createElement('span');
+        pageUnit.innerText = '页';
+        pageUnit.style.color = '#606266';
+        offsetWrap.appendChild(offsetInput);
+        offsetWrap.appendChild(pageUnit);
+        pageRow.appendChild(anchorSelect);
+        pageRow.appendChild(offsetWrap);
+
+        const help = document.createElement('div');
+        help.innerText = options.learning
+            ? '可在保存前修改为“从头第几页”或“倒数第几页”。'
+            : '修改名称或页码规则不会改变已经学习的页面落点。';
+        help.style.marginTop = '8px';
+        help.style.fontSize = '12px';
+        help.style.lineHeight = '1.45';
+        help.style.color = '#606266';
+
+        const actionRow = document.createElement('div');
+        actionRow.style.display = 'grid';
+        actionRow.style.gridTemplateColumns = '1fr 1fr';
+        actionRow.style.gap = '8px';
+        actionRow.style.marginTop = '10px';
+        const confirmButton = document.createElement('button');
+        confirmButton.innerText = options.learning ? '确认保存' : '保存修改';
+        confirmButton.style.height = '32px';
+        confirmButton.style.border = 'none';
+        confirmButton.style.borderRadius = '6px';
+        confirmButton.style.backgroundColor = '#409EFF';
+        confirmButton.style.color = '#fff';
+        confirmButton.style.fontWeight = '700';
+        confirmButton.style.cursor = 'pointer';
+        confirmButton.onclick = () => {
+            const name = nameInput.value.trim();
+            const rawOffset = Number(offsetInput.value);
+            if (!name) {
+                setStatus('模板名称不能为空', 'error');
+                return;
+            }
+            if (!Number.isFinite(rawOffset) || rawOffset < 1) {
+                setStatus('页码必须是大于 0 的整数', 'error');
+                return;
+            }
+            const offset = Math.max(1, Math.round(rawOffset));
+            const saved = persistPositionTemplate({
+                ...normalized,
+                name,
+                anchor: anchorSelect.value,
+                offset
+            });
+            if (!saved) {
+                setStatus('模板保存失败，请重试', 'error');
+                return;
+            }
+            removePositionTemplateReview();
+            if (options.learning) {
+                positionTemplateLearningState = null;
+                removePositionTemplateLearningControls();
+            }
+            setStatus(`已保存位置模板：${saved.name}（${formatTemplatePageLabel(saved)}）`, 'success');
+        };
+
+        const backButton = document.createElement('button');
+        backButton.innerText = options.learning ? '返回调整' : '取消';
+        backButton.style.height = '32px';
+        backButton.style.border = '1px solid #dcdfe6';
+        backButton.style.borderRadius = '6px';
+        backButton.style.backgroundColor = '#fff';
+        backButton.style.color = '#606266';
+        backButton.style.fontWeight = '700';
+        backButton.style.cursor = 'pointer';
+        backButton.onclick = () => {
+            removePositionTemplateReview();
+            if (options.learning) {
+                setStatus('可继续调整签名位置，完成后再次点击“保存位置”', 'running');
+            }
+        };
+        actionRow.appendChild(confirmButton);
+        actionRow.appendChild(backButton);
+
+        review.appendChild(title);
+        if (options.learning && options.pageNumber && options.totalPages) review.appendChild(detected);
+        review.appendChild(nameInput);
+        review.appendChild(pageRow);
+        review.appendChild(help);
+        review.appendChild(actionRow);
+        document.body.appendChild(review);
+        nameInput.focus();
+        nameInput.select();
+        return true;
+    }
+
     function removePositionTemplateLearningControls() {
         document.querySelector('div[data-auto-sign-learning-controls]')?.remove();
     }
 
     function cancelPositionTemplateLearning(message = '已取消位置学习') {
         positionTemplateLearningState = null;
+        removePositionTemplateReview();
         removePositionTemplateLearningControls();
         setStatus(message, 'idle');
     }
@@ -353,31 +556,25 @@
         const totalPages = pages.length;
         const anchor = positionTemplateLearningState.anchor;
         const offset = anchor === 'from-end' ? totalPages - pageNumber + 1 : pageNumber;
+        const existingTemplate = positionTemplateLearningState.editingTemplateId
+            ? getSignPositionTemplates().find(item => item.id === positionTemplateLearningState.editingTemplateId)
+            : null;
         const template = normalizePositionTemplate({
-            id: `template-${Date.now()}`,
+            id: existingTemplate?.id || `template-${Date.now()}`,
             name: positionTemplateLearningState.name,
             anchor,
             offset,
             xRatio: (overlayRect.left + overlayRect.width / 2 - boxRect.left) / boxRect.width,
             yRatio: (overlayRect.top + overlayRect.height / 2 - boxRect.top) / boxRect.height,
             pageAspectRatio: boxRect.width / boxRect.height,
-            createdAt: Date.now()
+            createdAt: existingTemplate?.createdAt || Date.now()
         });
         if (!template) {
             setStatus('模板数据无效，请取消后重试', 'error');
             return false;
         }
 
-        const templates = getSignPositionTemplates().filter(item => item.name !== template.name);
-        templates.push(template);
-        setSignPositionTemplates(templates);
-        setActiveSignPositionTemplateId(template.id);
-        setSignPlacementMode(SIGN_PLACEMENT_MODES.TEMPLATE);
-        positionTemplateLearningState = null;
-        removePositionTemplateLearningControls();
-        const pageLabel = template.anchor === 'from-end' ? `倒数第 ${template.offset} 页` : `从头第 ${template.offset} 页`;
-        setStatus(`已保存位置模板：${template.name}（${pageLabel}）`, 'success');
-        return true;
+        return openPositionTemplateReview(template, { learning: true, pageNumber, totalPages });
     }
 
     function createPositionTemplateLearningControls() {
@@ -416,7 +613,7 @@
         getControlToolbar().appendChild(controls);
     }
 
-    function startPositionTemplateLearning(name, anchor) {
+    function startPositionTemplateLearning(name, anchor, editingTemplateId = '') {
         const normalizedName = String(name || '').trim().slice(0, 40);
         if (getPageType() !== 'signature') {
             setStatus('请在电子签章页面打开目标文件后学习位置', 'error');
@@ -433,6 +630,7 @@
         positionTemplateLearningState = {
             name: normalizedName,
             anchor: anchor === 'from-start' ? 'from-start' : 'from-end',
+            editingTemplateId: String(editingTemplateId || ''),
             initialOverlays: new Set(document.querySelectorAll(SELECTORS.signatureOverlay))
         };
         closeSettingsPanel();
@@ -809,13 +1007,40 @@
             option.selected = template.id === activeTemplateId;
             templateSelect.appendChild(option);
         });
+
+        const templateSummary = document.createElement('div');
+        templateSummary.setAttribute('data-auto-sign-template-summary', 'true');
+        templateSummary.style.marginTop = '8px';
+        templateSummary.style.padding = '8px';
+        templateSummary.style.borderRadius = '6px';
+        templateSummary.style.backgroundColor = '#f5f7fa';
+        templateSummary.style.color = '#606266';
+        templateSummary.style.fontSize = '12px';
+        templateSummary.style.lineHeight = '1.45';
+
+        let editTemplateButton = null;
+        let relearnTemplateButton = null;
+        let deleteTemplateButton = null;
+        const updateSelectedTemplateDetails = () => {
+            const selected = getActiveSignPositionTemplate();
+            templateSummary.innerText = selected
+                ? `${selected.name} · ${formatTemplatePageLabel(selected)}`
+                : '选择模板后会在这里显示目标页规则';
+            [editTemplateButton, relearnTemplateButton, deleteTemplateButton].filter(Boolean).forEach(button => {
+                const disabled = !selected || isAutoSignRunningState();
+                button.disabled = disabled;
+                button.style.opacity = disabled ? '0.55' : '1';
+                button.style.cursor = disabled ? 'not-allowed' : 'pointer';
+            });
+        };
         templateSelect.onchange = () => {
             setActiveSignPositionTemplateId(templateSelect.value);
             if (templateSelect.value) {
                 setSignPlacementMode(SIGN_PLACEMENT_MODES.TEMPLATE);
                 const selected = getActiveSignPositionTemplate();
-                setStatus(`已选择位置模板：${selected?.name || ''}`, 'success');
+                setStatus(`已选择位置模板：${selected?.name || ''}（${formatTemplatePageLabel(selected)}）`, 'success');
             }
+            updateSelectedTemplateDetails();
         };
 
         const templateNameInput = document.createElement('input');
@@ -869,7 +1094,52 @@
         anchorRow.appendChild(anchorSelect);
         anchorRow.appendChild(learnButton);
 
-        const deleteTemplateButton = document.createElement('button');
+        const templateActionRow = document.createElement('div');
+        templateActionRow.style.display = 'grid';
+        templateActionRow.style.gridTemplateColumns = '1fr 1fr';
+        templateActionRow.style.gap = '6px';
+        templateActionRow.style.marginTop = '8px';
+
+        editTemplateButton = document.createElement('button');
+        editTemplateButton.setAttribute('data-auto-sign-template-control', 'true');
+        editTemplateButton.setAttribute('data-auto-sign-template-edit', 'true');
+        editTemplateButton.innerText = '修改名称和页码';
+        editTemplateButton.style.height = '32px';
+        editTemplateButton.style.border = '1px solid #dcdfe6';
+        editTemplateButton.style.borderRadius = '6px';
+        editTemplateButton.style.backgroundColor = '#fff';
+        editTemplateButton.style.color = '#303133';
+        editTemplateButton.onclick = () => {
+            const activeTemplate = getActiveSignPositionTemplate();
+            if (!activeTemplate) {
+                setStatus('请先选择要修改的位置模板', 'error');
+                return;
+            }
+            closeSettingsPanel();
+            openPositionTemplateReview(activeTemplate, { learning: false });
+        };
+
+        relearnTemplateButton = document.createElement('button');
+        relearnTemplateButton.setAttribute('data-auto-sign-template-control', 'true');
+        relearnTemplateButton.setAttribute('data-auto-sign-template-relearn', 'true');
+        relearnTemplateButton.innerText = '重新学习位置';
+        relearnTemplateButton.style.height = '32px';
+        relearnTemplateButton.style.border = '1px solid #409EFF';
+        relearnTemplateButton.style.borderRadius = '6px';
+        relearnTemplateButton.style.backgroundColor = '#ecf5ff';
+        relearnTemplateButton.style.color = '#1677d2';
+        relearnTemplateButton.onclick = () => {
+            const activeTemplate = getActiveSignPositionTemplate();
+            if (!activeTemplate) {
+                setStatus('请先选择要重新学习的位置模板', 'error');
+                return;
+            }
+            startPositionTemplateLearning(activeTemplate.name, activeTemplate.anchor, activeTemplate.id);
+        };
+        templateActionRow.appendChild(editTemplateButton);
+        templateActionRow.appendChild(relearnTemplateButton);
+
+        deleteTemplateButton = document.createElement('button');
         deleteTemplateButton.setAttribute('data-auto-sign-template-control', 'true');
         deleteTemplateButton.setAttribute('data-auto-sign-template-delete', 'true');
         deleteTemplateButton.innerText = '删除当前模板';
@@ -904,10 +1174,13 @@
 
         templatePositionContent.appendChild(templateSelectLabel);
         templatePositionContent.appendChild(templateSelect);
+        templatePositionContent.appendChild(templateSummary);
         templatePositionContent.appendChild(templateNameInput);
         templatePositionContent.appendChild(anchorRow);
+        templatePositionContent.appendChild(templateActionRow);
         templatePositionContent.appendChild(deleteTemplateButton);
         templatePositionContent.appendChild(templateHelp);
+        updateSelectedTemplateDetails();
 
         positionSection.appendChild(placementLabel);
         positionSection.appendChild(placementModeRow);
@@ -1286,6 +1559,7 @@
                 const dot = badge.querySelector('span[data-auto-sign-status-dot]');
                 const textEl = badge.querySelector('span[data-auto-sign-status-text]');
                 badge.setAttribute('data-auto-sign-status-type', type);
+                badge.title = normalizedText;
                 badge.style.backgroundColor = style.background;
                 badge.style.border = `1px solid ${style.border}`;
                 badge.style.color = style.color;
@@ -2669,6 +2943,7 @@
         if (settingsButton) settingsButton.remove();
         if (settingsPanel) closeSettingsPanel();
         if (badge) badge.remove();
+        removePositionTemplateReview();
         statusBadge = null;
     }
 

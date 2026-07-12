@@ -27,3 +27,11 @@ assert(source.includes("data-auto-sign-learning-save"), 'learning mode should ex
 assert(source.includes("data-auto-sign-learning-cancel"), 'learning mode should expose a cancel command');
 assert(source.includes('页面比例与模板不一致'), 'template mismatch should stop instead of guessing');
 assert(source.includes('位置模板仅记录落点'), 'settings should explain the beta scope');
+assert(source.includes('function formatTemplatePageLabel('), 'template page rule should have a user-facing summary');
+assert(source.includes('data-auto-sign-template-summary'), 'selected template should display its page rule');
+assert(source.includes('data-auto-sign-template-review'), 'learning should show a review editor before saving');
+assert(source.includes('修改名称和页码'), 'saved templates should support metadata editing');
+assert(source.includes('重新学习位置'), 'saved templates should support position relearning');
+assert(source.includes('editingTemplateId'), 'relearning should update the existing template');
+assert(source.includes("badge.title = normalizedText"), 'full status text should remain available as a tooltip');
+assert(source.includes("statusBadge.style.whiteSpace = 'normal'"), 'status text should wrap instead of being truncated');
