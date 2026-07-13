@@ -7,17 +7,6 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'autoSign.js'), 'utf8'
 assert(source.includes("const SIGN_PLACEMENT_MODES = Object.freeze"), 'sign placement modes should be explicit');
 assert(source.includes("FIXED: 'fixed'"), 'fixed position mode should remain available');
 assert(source.includes("TEMPLATE: 'template'"), 'template position mode should be available');
-assert(source.includes('function resolveTemplatePageNumber('), 'template page resolver should exist');
-assert(source.includes("anchor === 'from-end'"), 'template should support counting pages from the end');
-assert(source.includes('normalizedTotal - normalizedOffset + 1'), 'from-end page calculation should use total pages');
-const resolverSource = source.match(/function resolveTemplatePageNumber\([\s\S]*?\n    \}/)?.[0];
-assert(resolverSource, 'template page resolver should be readable for behavior checks');
-const resolveTemplatePageNumber = new Function(`${resolverSource}; return resolveTemplatePageNumber;`)();
-assert.strictEqual(resolveTemplatePageNumber(19, 'from-end', 6), 14, '19 pages from-end 6 should resolve to page 14');
-assert.strictEqual(resolveTemplatePageNumber(16, 'from-end', 6), 11, 'from-end anchor should adapt to shorter files');
-assert.strictEqual(resolveTemplatePageNumber(22, 'from-end', 6), 17, 'from-end anchor should adapt to longer files');
-assert.strictEqual(resolveTemplatePageNumber(19, 'from-start', 6), 6, 'from-start anchor should keep the absolute leading offset');
-assert.strictEqual(resolveTemplatePageNumber(4, 'from-end', 6), null, 'missing target page should fail safely');
 assert(source.includes('xRatio'), 'template should store a horizontal ratio');
 assert(source.includes('yRatio'), 'template should store a vertical ratio');
 assert(source.includes("signatureCanvasBox: '.canvasbox'"), 'canvas box selector should be centralized');
@@ -32,8 +21,12 @@ assert(source.includes('function createVisualAnchorFromCanvas('), 'learning shou
 assert(source.includes('function findVisualAnchorAcrossPages('), 'template signing should scan all pages for the learned visual anchor');
 assert(source.includes('function getVisualAnchorMatchDecision('), 'visual anchor matching should have an explicit safety decision');
 assert(source.includes("reason: 'ambiguous'"), 'ambiguous visual matches should be rejected');
-assert(source.includes("targetSource = 'visual-anchor'"), 'matching should record when a visual anchor selected the target');
+assert(source.includes("targetSource: 'visual-anchor'"), 'matching should record when a visual anchor selected the target');
 assert(source.includes('表格锚点已学习'), 'settings should show whether a template has a learned visual anchor');
+assert(source.includes('|| !visualAnchor'), 'templates without a visual anchor should be rejected');
+assert(!source.includes('function resolveTemplatePageNumber('), 'beta templates should not retain page-number fallback logic');
+assert(!source.includes("targetSource = 'page-rule'"), 'beta templates should never fall back to page-number targets');
+assert(source.includes('无法读取页面画布特征'), 'learning should fail when the canvas cannot provide an anchor');
 
 const rectHelpersStart = source.indexOf('function clampNumber(');
 const rectHelpersEnd = source.indexOf('function normalizeVisualAnchor(', rectHelpersStart);
@@ -55,10 +48,9 @@ const getVisualAnchorMatchDecision = new Function(
 assert.strictEqual(getVisualAnchorMatchDecision(0.1, 0.14).matched, true, 'a strong and distinct match should be accepted');
 assert.strictEqual(getVisualAnchorMatchDecision(0.1, 0.11).reason, 'ambiguous', 'nearby candidate scores should require manual handling');
 assert.strictEqual(getVisualAnchorMatchDecision(0.2, Infinity).reason, 'low-score', 'weak image matches should be rejected');
-assert(source.includes('function formatTemplatePageLabel('), 'template page rule should have a user-facing summary');
-assert(source.includes('data-auto-sign-template-summary'), 'selected template should display its page rule');
+assert(source.includes('data-auto-sign-template-summary'), 'selected template should display its anchor state');
 assert(source.includes('data-auto-sign-template-review'), 'learning should show a review editor before saving');
-assert(source.includes('修改名称和页码'), 'saved templates should support metadata editing');
+assert(source.includes('修改模板名称'), 'saved templates should support metadata editing');
 assert(source.includes('重新学习位置'), 'saved templates should support position relearning');
 assert(source.includes('editingTemplateId'), 'relearning should update the existing template');
 assert(source.includes("badge.title = normalizedText"), 'full status text should remain available as a tooltip');

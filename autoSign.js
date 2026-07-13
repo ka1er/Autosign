@@ -284,21 +284,18 @@
 
     function normalizePositionTemplate(template) {
         if (!template || typeof template !== 'object') return null;
-        const anchor = template.anchor === 'from-start' ? 'from-start' : 'from-end';
-        const offset = Math.max(1, Math.round(Number(template.offset) || 1));
         const xRatio = Number(template.xRatio);
         const yRatio = Number(template.yRatio);
         const pageAspectRatio = Number(template.pageAspectRatio);
-        if (!template.id || !template.name || !Number.isFinite(xRatio) || !Number.isFinite(yRatio)) return null;
+        const visualAnchor = normalizeVisualAnchor(template.visualAnchor);
+        if (!template.id || !template.name || !Number.isFinite(xRatio) || !Number.isFinite(yRatio) || !visualAnchor) return null;
         return {
             id: String(template.id),
             name: String(template.name).slice(0, 40),
-            anchor,
-            offset,
             xRatio: Math.min(Math.max(xRatio, 0), 1),
             yRatio: Math.min(Math.max(yRatio, 0), 1),
             pageAspectRatio: Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : null,
-            visualAnchor: normalizeVisualAnchor(template.visualAnchor),
+            visualAnchor,
             createdAt: Number(template.createdAt) || Date.now()
         };
     }
@@ -342,16 +339,6 @@
             return template ? `位置模板：${template.name}` : '位置模板：未选择';
         }
         return `固定位置：${getSignPositionLabel(getSignPositionMode())}`;
-    }
-
-    function resolveTemplatePageNumber(totalPages, anchor, offset) {
-        const normalizedTotal = Math.max(0, Math.round(Number(totalPages) || 0));
-        const normalizedOffset = Math.max(1, Math.round(Number(offset) || 1));
-        if (!normalizedTotal) return null;
-        const pageNumber = anchor === 'from-end'
-            ? normalizedTotal - normalizedOffset + 1
-            : normalizedOffset;
-        return pageNumber >= 1 && pageNumber <= normalizedTotal ? pageNumber : null;
     }
 
     function getSignaturePageBoxes() {
@@ -510,13 +497,6 @@
         return { matched: true, ...best, targetXRatio, targetYRatio, next: matches[1] };
     }
 
-    function formatTemplatePageLabel(template) {
-        if (!template) return '未选择模板';
-        return template.anchor === 'from-end'
-            ? `倒数第 ${template.offset} 页`
-            : `从头第 ${template.offset} 页`;
-    }
-
     function removePositionTemplateReview() {
         document.querySelector('div[data-auto-sign-template-review]')?.remove();
     }
@@ -559,7 +539,7 @@
         review.style.color = '#303133';
 
         const title = document.createElement('div');
-        title.innerText = options.learning ? '确认位置模板' : '修改名称和页码';
+        title.innerText = options.learning ? '确认位置模板' : '修改模板名称';
         title.style.fontWeight = '700';
         title.style.fontSize = '14px';
         title.style.marginBottom = '10px';
@@ -576,14 +556,12 @@
 
         const visualAnchorHint = document.createElement('div');
         if (options.learning) {
-            visualAnchorHint.innerText = normalized.visualAnchor
-                ? '已学习附近的表格画布特征。后续将优先自动寻找相同区域。'
-                : '未能读取页面画布特征，将仅按页码规则落章。';
+            visualAnchorHint.innerText = '已学习附近的表格画布特征。后续将自动寻找相同区域。';
             visualAnchorHint.style.marginBottom = '8px';
             visualAnchorHint.style.padding = '7px 8px';
             visualAnchorHint.style.borderRadius = '6px';
-            visualAnchorHint.style.backgroundColor = normalized.visualAnchor ? '#f0f9eb' : '#fdf6ec';
-            visualAnchorHint.style.color = normalized.visualAnchor ? '#529b2e' : '#a66a14';
+            visualAnchorHint.style.backgroundColor = '#f0f9eb';
+            visualAnchorHint.style.color = '#529b2e';
             visualAnchorHint.style.fontSize = '12px';
             visualAnchorHint.style.lineHeight = '1.45';
         }
@@ -600,55 +578,10 @@
         nameInput.style.borderRadius = '6px';
         nameInput.style.boxSizing = 'border-box';
 
-        const pageRow = document.createElement('div');
-        pageRow.style.display = 'grid';
-        pageRow.style.gridTemplateColumns = '1fr 92px';
-        pageRow.style.gap = '8px';
-        pageRow.style.marginTop = '8px';
-
-        const anchorSelect = document.createElement('select');
-        anchorSelect.style.height = '32px';
-        anchorSelect.style.border = '1px solid #dcdfe6';
-        anchorSelect.style.borderRadius = '6px';
-        anchorSelect.style.padding = '0 8px';
-        [
-            { value: 'from-end', label: '从末页数' },
-            { value: 'from-start', label: '从首页数' }
-        ].forEach(item => {
-            const option = document.createElement('option');
-            option.value = item.value;
-            option.innerText = item.label;
-            option.selected = item.value === normalized.anchor;
-            anchorSelect.appendChild(option);
-        });
-
-        const offsetWrap = document.createElement('div');
-        offsetWrap.style.display = 'flex';
-        offsetWrap.style.alignItems = 'center';
-        offsetWrap.style.gap = '4px';
-        const offsetInput = document.createElement('input');
-        offsetInput.type = 'number';
-        offsetInput.min = '1';
-        offsetInput.step = '1';
-        offsetInput.value = String(normalized.offset);
-        offsetInput.style.width = '62px';
-        offsetInput.style.height = '32px';
-        offsetInput.style.padding = '0 6px';
-        offsetInput.style.border = '1px solid #dcdfe6';
-        offsetInput.style.borderRadius = '6px';
-        offsetInput.style.boxSizing = 'border-box';
-        const pageUnit = document.createElement('span');
-        pageUnit.innerText = '页';
-        pageUnit.style.color = '#606266';
-        offsetWrap.appendChild(offsetInput);
-        offsetWrap.appendChild(pageUnit);
-        pageRow.appendChild(anchorSelect);
-        pageRow.appendChild(offsetWrap);
-
         const help = document.createElement('div');
         help.innerText = options.learning
-            ? '可在保存前修改为“从头第几页”或“倒数第几页”。'
-            : '修改名称或页码规则不会改变已经学习的页面落点。';
+            ? '页码会由表格锚点自动定位，无需设置从头或从末页数。'
+            : '修改名称不会改变已经学习的表格锚点和页面内落点。';
         help.style.marginTop = '8px';
         help.style.fontSize = '12px';
         help.style.lineHeight = '1.45';
@@ -670,21 +603,13 @@
         confirmButton.style.cursor = 'pointer';
         confirmButton.onclick = () => {
             const name = nameInput.value.trim();
-            const rawOffset = Number(offsetInput.value);
             if (!name) {
                 setStatus('模板名称不能为空', 'error');
                 return;
             }
-            if (!Number.isFinite(rawOffset) || rawOffset < 1) {
-                setStatus('页码必须是大于 0 的整数', 'error');
-                return;
-            }
-            const offset = Math.max(1, Math.round(rawOffset));
             const saved = persistPositionTemplate({
                 ...normalized,
-                name,
-                anchor: anchorSelect.value,
-                offset
+                name
             });
             if (!saved) {
                 setStatus('模板保存失败，请重试', 'error');
@@ -695,7 +620,7 @@
                 positionTemplateLearningState = null;
                 removePositionTemplateLearningControls();
             }
-            setStatus(`已保存位置模板：${saved.name}（${formatTemplatePageLabel(saved)}）`, 'success');
+            setStatus(`已保存位置模板：${saved.name}（表格锚点）`, 'success');
         };
 
         const backButton = document.createElement('button');
@@ -720,7 +645,6 @@
         if (options.learning && options.pageNumber && options.totalPages) review.appendChild(detected);
         if (options.learning) review.appendChild(visualAnchorHint);
         review.appendChild(nameInput);
-        review.appendChild(pageRow);
         review.appendChild(help);
         review.appendChild(actionRow);
         document.body.appendChild(review);
@@ -768,8 +692,6 @@
 
         const pageNumber = pageIndex + 1;
         const totalPages = pages.length;
-        const anchor = positionTemplateLearningState.anchor;
-        const offset = anchor === 'from-end' ? totalPages - pageNumber + 1 : pageNumber;
         const existingTemplate = positionTemplateLearningState.editingTemplateId
             ? getSignPositionTemplates().find(item => item.id === positionTemplateLearningState.editingTemplateId)
             : null;
@@ -777,11 +699,13 @@
         const yRatio = (overlayRect.top + overlayRect.height / 2 - boxRect.top) / boxRect.height;
         const canvas = canvasBox.querySelector(SELECTORS.signatureCanvas);
         const visualAnchor = createVisualAnchorFromCanvas(canvas, xRatio, yRatio);
+        if (!visualAnchor) {
+            setStatus('无法读取页面画布特征，请刷新页面后重新学习', 'error');
+            return false;
+        }
         const template = normalizePositionTemplate({
             id: existingTemplate?.id || `template-${Date.now()}`,
             name: positionTemplateLearningState.name,
-            anchor,
-            offset,
             xRatio,
             yRatio,
             pageAspectRatio: boxRect.width / boxRect.height,
@@ -832,7 +756,7 @@
         getControlToolbar().appendChild(controls);
     }
 
-    function startPositionTemplateLearning(name, anchor, editingTemplateId = '') {
+    function startPositionTemplateLearning(name, editingTemplateId = '') {
         const normalizedName = String(name || '').trim().slice(0, 40);
         if (getPageType() !== 'signature') {
             setStatus('请在电子签章页面打开目标文件后学习位置', 'error');
@@ -848,7 +772,6 @@
         }
         positionTemplateLearningState = {
             name: normalizedName,
-            anchor: anchor === 'from-start' ? 'from-start' : 'from-end',
             editingTemplateId: String(editingTemplateId || ''),
             initialOverlays: new Set(document.querySelectorAll(SELECTORS.signatureOverlay))
         };
@@ -1243,8 +1166,8 @@
         const updateSelectedTemplateDetails = () => {
             const selected = getActiveSignPositionTemplate();
             templateSummary.innerText = selected
-                ? `${selected.name} · ${formatTemplatePageLabel(selected)} · ${selected.visualAnchor ? '表格锚点已学习' : '仅按页码'}`
-                : '选择模板后会在这里显示目标页规则';
+                ? `${selected.name} · 表格锚点已学习`
+                : '选择模板后会在这里显示表格锚点状态';
             [editTemplateButton, relearnTemplateButton, deleteTemplateButton].filter(Boolean).forEach(button => {
                 const disabled = !selected || isAutoSignRunningState();
                 button.disabled = disabled;
@@ -1257,7 +1180,7 @@
             if (templateSelect.value) {
                 setSignPlacementMode(SIGN_PLACEMENT_MODES.TEMPLATE);
                 const selected = getActiveSignPositionTemplate();
-                setStatus(`已选择位置模板：${selected?.name || ''}（${formatTemplatePageLabel(selected)}）`, 'success');
+                setStatus(`已选择位置模板：${selected?.name || ''}（表格锚点）`, 'success');
             }
             updateSelectedTemplateDetails();
         };
@@ -1276,28 +1199,6 @@
         templateNameInput.style.borderRadius = '6px';
         templateNameInput.style.boxSizing = 'border-box';
 
-        const anchorRow = document.createElement('div');
-        anchorRow.style.display = 'grid';
-        anchorRow.style.gridTemplateColumns = '1fr 1fr';
-        anchorRow.style.gap = '6px';
-        anchorRow.style.marginTop = '8px';
-        const anchorSelect = document.createElement('select');
-        anchorSelect.setAttribute('data-auto-sign-template-control', 'true');
-        anchorSelect.setAttribute('data-auto-sign-template-anchor', 'true');
-        anchorSelect.style.height = '32px';
-        anchorSelect.style.border = '1px solid #dcdfe6';
-        anchorSelect.style.borderRadius = '6px';
-        anchorSelect.style.padding = '0 8px';
-        [
-            { value: 'from-end', label: '从末页数' },
-            { value: 'from-start', label: '从首页数' }
-        ].forEach(item => {
-            const option = document.createElement('option');
-            option.value = item.value;
-            option.innerText = item.label;
-            anchorSelect.appendChild(option);
-        });
-
         const learnButton = document.createElement('button');
         learnButton.setAttribute('data-auto-sign-template-control', 'true');
         learnButton.setAttribute('data-auto-sign-template-learn', 'true');
@@ -1309,9 +1210,9 @@
         learnButton.style.color = '#1677d2';
         learnButton.style.fontWeight = '700';
         learnButton.style.cursor = 'pointer';
-        learnButton.onclick = () => startPositionTemplateLearning(templateNameInput.value, anchorSelect.value);
-        anchorRow.appendChild(anchorSelect);
-        anchorRow.appendChild(learnButton);
+        learnButton.style.width = '100%';
+        learnButton.style.marginTop = '8px';
+        learnButton.onclick = () => startPositionTemplateLearning(templateNameInput.value);
 
         const templateActionRow = document.createElement('div');
         templateActionRow.style.display = 'grid';
@@ -1322,7 +1223,7 @@
         editTemplateButton = document.createElement('button');
         editTemplateButton.setAttribute('data-auto-sign-template-control', 'true');
         editTemplateButton.setAttribute('data-auto-sign-template-edit', 'true');
-        editTemplateButton.innerText = '修改名称和页码';
+        editTemplateButton.innerText = '修改模板名称';
         editTemplateButton.style.height = '32px';
         editTemplateButton.style.border = '1px solid #dcdfe6';
         editTemplateButton.style.borderRadius = '6px';
@@ -1353,7 +1254,7 @@
                 setStatus('请先选择要重新学习的位置模板', 'error');
                 return;
             }
-            startPositionTemplateLearning(activeTemplate.name, activeTemplate.anchor, activeTemplate.id);
+            startPositionTemplateLearning(activeTemplate.name, activeTemplate.id);
         };
         templateActionRow.appendChild(editTemplateButton);
         templateActionRow.appendChild(relearnTemplateButton);
@@ -1395,7 +1296,7 @@
         templatePositionContent.appendChild(templateSelect);
         templatePositionContent.appendChild(templateSummary);
         templatePositionContent.appendChild(templateNameInput);
-        templatePositionContent.appendChild(anchorRow);
+        templatePositionContent.appendChild(learnButton);
         templatePositionContent.appendChild(templateActionRow);
         templatePositionContent.appendChild(deleteTemplateButton);
         templatePositionContent.appendChild(templateHelp);
@@ -3002,38 +2903,28 @@
         }
 
         const pages = getSignaturePageBoxes();
-        let pageNumber = resolveTemplatePageNumber(pages.length, template.anchor, template.offset);
-        let canvasBox = pageNumber ? pages[pageNumber - 1] : null;
-        let canvas = canvasBox?.querySelector(SELECTORS.signatureCanvas);
-        let xRatio = template.xRatio;
-        let yRatio = template.yRatio;
-        let targetSource = 'page-rule';
-        let visualScore = null;
-
-        if (template.visualAnchor) {
-            setStatus(`正在匹配模板“${template.name}”的表格位置...`);
-            const visualMatch = await findVisualAnchorAcrossPages(pages, template);
-            if (!visualMatch?.matched) {
-                const reason = visualMatch?.reason === 'ambiguous'
-                    ? '找到多个相近的表格位置'
-                    : '没有找到足够相似的表格位置';
-                notifyAttention(`位置模板“${template.name}”${reason}，已停止自动签章。请确认文件版式后重新学习模板。`);
-                stopProcess(true);
-                return null;
-            }
-            pageNumber = visualMatch.pageNumber;
-            canvasBox = visualMatch.canvasBox;
-            canvas = visualMatch.canvas;
-            xRatio = visualMatch.targetXRatio;
-            yRatio = visualMatch.targetYRatio;
-            targetSource = 'visual-anchor';
-            visualScore = visualMatch.score;
-            setStatus(`已通过表格锚点定位第 ${pageNumber} / ${pages.length} 页`);
-        } else if (!pageNumber) {
-            notifyAttention(`位置模板“${template.name}”的目标页不存在，请重新学习或改用固定位置。`);
+        if (!template.visualAnchor) {
+            notifyAttention(`位置模板“${template.name}”缺少表格锚点，请重新学习后再运行。`);
             stopProcess(true);
             return null;
         }
+        setStatus(`正在匹配模板“${template.name}”的表格位置...`);
+        const visualMatch = await findVisualAnchorAcrossPages(pages, template);
+        if (!visualMatch?.matched) {
+            const reason = visualMatch?.reason === 'ambiguous'
+                ? '找到多个相近的表格位置'
+                : '没有找到足够相似的表格位置';
+            notifyAttention(`位置模板“${template.name}”${reason}，已停止自动签章。请确认文件版式后重新学习模板。`);
+            stopProcess(true);
+            return null;
+        }
+        const pageNumber = visualMatch.pageNumber;
+        const canvasBox = visualMatch.canvasBox;
+        const canvas = visualMatch.canvas;
+        const xRatio = visualMatch.targetXRatio;
+        const yRatio = visualMatch.targetYRatio;
+        const visualScore = visualMatch.score;
+        setStatus(`已通过表格锚点定位第 ${pageNumber} / ${pages.length} 页`);
 
         if (!canvas) {
             notifyAttention(`位置模板“${template.name}”对应页面的画布未加载，请刷新后重试。`);
@@ -3066,13 +2957,11 @@
         };
         addAutoSignEvent('template_sign_target', {
             templateName: template.name,
-            anchor: template.anchor,
-            offset: template.offset,
             pageNumber,
             totalPages: pages.length,
             xRatio,
             yRatio,
-            targetSource,
+            targetSource: 'visual-anchor',
             visualScore
         }, 'info');
         return { canvas, position, template, pageNumber, totalPages: pages.length };
