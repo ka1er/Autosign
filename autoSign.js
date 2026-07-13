@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         PMS系统自动签章助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.10-beta
+// @version      1.1.11-beta
 // @description  PMS系统签章自动化助手 - 支持签字位置设置和优化的签名流程
 // @author       kaler
 // @match        *://*.chinamobile.com/*
@@ -79,6 +79,12 @@
         FIXED: 'fixed',
         TEMPLATE: 'template'
     });
+    const VISUAL_ANCHOR_FEATURE_COLUMNS = 24;
+    const VISUAL_ANCHOR_FEATURE_ROWS = 16;
+    const VISUAL_ANCHOR_THUMBNAIL_WIDTH = 320;
+    const VISUAL_ANCHOR_SCAN_STEP = 4;
+    const VISUAL_ANCHOR_MAX_SCORE = 0.16;
+    const VISUAL_ANCHOR_MIN_SCORE_GAP = 0.018;
     let positionTemplateLearningState = null;
 
     function getControlToolbar() {
@@ -229,6 +235,53 @@
         return normalized;
     }
 
+    function clampNumber(value, min, max) {
+        return Math.min(Math.max(Number(value), min), max);
+    }
+
+    function calculateVisualAnchorRect(xRatio, yRatio) {
+        const width = 0.24;
+        const height = 0.18;
+        const x = clampNumber(Number(xRatio) - width - 0.015, 0, 1 - width);
+        const y = clampNumber(Number(yRatio) - height / 2, 0, 1 - height);
+        return {
+            x,
+            y,
+            width,
+            height,
+            targetOffsetX: Number(xRatio) - x,
+            targetOffsetY: Number(yRatio) - y
+        };
+    }
+
+    function normalizeVisualAnchor(visualAnchor) {
+        if (!visualAnchor || typeof visualAnchor !== 'object') return null;
+        const featureColumns = Math.round(Number(visualAnchor.featureColumns));
+        const featureRows = Math.round(Number(visualAnchor.featureRows));
+        const feature = Array.isArray(visualAnchor.feature) ? visualAnchor.feature : [];
+        const rect = visualAnchor.rect || {};
+        const numbers = [rect.x, rect.y, rect.width, rect.height, rect.targetOffsetX, rect.targetOffsetY].map(Number);
+        if (
+            featureColumns !== VISUAL_ANCHOR_FEATURE_COLUMNS ||
+            featureRows !== VISUAL_ANCHOR_FEATURE_ROWS ||
+            feature.length !== featureColumns * featureRows ||
+            numbers.some(value => !Number.isFinite(value))
+        ) return null;
+        const [x, y, width, height, targetOffsetX, targetOffsetY] = numbers;
+        if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1) return null;
+        if (targetOffsetX < 0 || targetOffsetY < 0 || targetOffsetX > 1 || targetOffsetY > 1) return null;
+        const normalizedFeature = feature.map(value => Math.round(clampNumber(value, 0, 255)));
+        const inkAverage = normalizedFeature.reduce((sum, value) => sum + value, 0) / normalizedFeature.length;
+        if (inkAverage < 6) return null;
+        return {
+            version: 1,
+            rect: { x, y, width, height, targetOffsetX, targetOffsetY },
+            featureColumns,
+            featureRows,
+            feature: normalizedFeature
+        };
+    }
+
     function normalizePositionTemplate(template) {
         if (!template || typeof template !== 'object') return null;
         const anchor = template.anchor === 'from-start' ? 'from-start' : 'from-end';
@@ -245,6 +298,7 @@
             xRatio: Math.min(Math.max(xRatio, 0), 1),
             yRatio: Math.min(Math.max(yRatio, 0), 1),
             pageAspectRatio: Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : null,
+            visualAnchor: normalizeVisualAnchor(template.visualAnchor),
             createdAt: Number(template.createdAt) || Date.now()
         };
     }
@@ -311,6 +365,151 @@
         return rect.width > 0 && rect.height > 0 ? rect.width / rect.height : null;
     }
 
+    function readCanvasThumbnail(canvas, targetWidth = VISUAL_ANCHOR_THUMBNAIL_WIDTH) {
+        if (!canvas || !canvas.width || !canvas.height) return null;
+        const width = Math.max(1, Math.round(targetWidth));
+        const height = Math.max(1, Math.round(width * canvas.height / canvas.width));
+        const thumbnail = document.createElement('canvas');
+        thumbnail.width = width;
+        thumbnail.height = height;
+        const context = thumbnail.getContext('2d', { willReadFrequently: true });
+        if (!context) return null;
+        try {
+            context.drawImage(canvas, 0, 0, width, height);
+            return { width, height, data: context.getImageData(0, 0, width, height).data };
+        } catch (error) {
+            console.warn('读取签章画布缩略图失败', error);
+            return null;
+        }
+    }
+
+    function getThumbnailInkValue(thumbnail, x, y) {
+        const safeX = Math.max(0, Math.min(thumbnail.width - 1, Math.round(x)));
+        const safeY = Math.max(0, Math.min(thumbnail.height - 1, Math.round(y)));
+        const index = (safeY * thumbnail.width + safeX) * 4;
+        const brightness = thumbnail.data[index] * 0.299 + thumbnail.data[index + 1] * 0.587 + thumbnail.data[index + 2] * 0.114;
+        return Math.round(Math.max(0, 245 - brightness) / 245 * 255);
+    }
+
+    function sampleVisualAnchorFeature(thumbnail, x, y, width, height, columns, rows) {
+        if (!thumbnail || width < columns || height < rows) return null;
+        const feature = [];
+        for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+                feature.push(getThumbnailInkValue(
+                    thumbnail,
+                    x + (column + 0.5) * width / columns,
+                    y + (row + 0.5) * height / rows
+                ));
+            }
+        }
+        return feature;
+    }
+
+    function getVisualAnchorFeatureScore(expected, actual) {
+        if (!Array.isArray(expected) || !Array.isArray(actual) || expected.length !== actual.length || !expected.length) return Infinity;
+        let difference = 0;
+        let weight = 0;
+        for (let index = 0; index < expected.length; index += 1) {
+            const expectedValue = expected[index];
+            const actualValue = actual[index];
+            const cellWeight = 0.2 + Math.max(expectedValue, actualValue) / 255;
+            difference += Math.abs(expectedValue - actualValue) * cellWeight;
+            weight += cellWeight;
+        }
+        return difference / (255 * weight);
+    }
+
+    function getVisualAnchorMatchDecision(bestScore, nextScore) {
+        if (!Number.isFinite(bestScore) || bestScore > VISUAL_ANCHOR_MAX_SCORE) return { matched: false, reason: 'low-score' };
+        if (Number.isFinite(nextScore) && nextScore - bestScore < VISUAL_ANCHOR_MIN_SCORE_GAP) return { matched: false, reason: 'ambiguous' };
+        return { matched: true, reason: 'matched' };
+    }
+
+    function findVisualAnchorMatchesOnThumbnail(thumbnail, visualAnchor) {
+        if (!thumbnail || !visualAnchor) return [];
+        const { rect, featureColumns, featureRows, feature } = visualAnchor;
+        const patchWidth = Math.round(rect.width * thumbnail.width);
+        const patchHeight = Math.round(rect.height * thumbnail.height);
+        if (patchWidth < featureColumns || patchHeight < featureRows) return [];
+        const maxX = thumbnail.width - patchWidth;
+        const maxY = thumbnail.height - patchHeight;
+        const candidates = [];
+        const consider = (x, y) => {
+            const candidate = sampleVisualAnchorFeature(thumbnail, x, y, patchWidth, patchHeight, featureColumns, featureRows);
+            const score = getVisualAnchorFeatureScore(feature, candidate);
+            candidates.push({ x, y, patchWidth, patchHeight, score });
+        };
+
+        for (let y = 0; y <= maxY; y += VISUAL_ANCHOR_SCAN_STEP) {
+            for (let x = 0; x <= maxX; x += VISUAL_ANCHOR_SCAN_STEP) consider(x, y);
+        }
+        if (!candidates.length) return [];
+        candidates.sort((left, right) => left.score - right.score);
+        const best = candidates[0];
+        const refineMinX = Math.max(0, best.x - VISUAL_ANCHOR_SCAN_STEP);
+        const refineMaxX = Math.min(maxX, best.x + VISUAL_ANCHOR_SCAN_STEP);
+        const refineMinY = Math.max(0, best.y - VISUAL_ANCHOR_SCAN_STEP);
+        const refineMaxY = Math.min(maxY, best.y + VISUAL_ANCHOR_SCAN_STEP);
+        for (let y = refineMinY; y <= refineMaxY; y += 1) {
+            for (let x = refineMinX; x <= refineMaxX; x += 1) {
+                if (x === best.x && y === best.y) continue;
+                consider(x, y);
+            }
+        }
+        candidates.sort((left, right) => left.score - right.score);
+        const refinedBest = candidates[0];
+        const runnerUp = candidates.find(candidate => {
+            return Math.abs(candidate.x - refinedBest.x) > patchWidth / 2 || Math.abs(candidate.y - refinedBest.y) > patchHeight / 2;
+        });
+        return [refinedBest, runnerUp].filter(Boolean);
+    }
+
+    function createVisualAnchorFromCanvas(canvas, xRatio, yRatio) {
+        const thumbnail = readCanvasThumbnail(canvas);
+        const rect = calculateVisualAnchorRect(xRatio, yRatio);
+        if (!thumbnail) return null;
+        const feature = sampleVisualAnchorFeature(
+            thumbnail,
+            Math.round(rect.x * thumbnail.width),
+            Math.round(rect.y * thumbnail.height),
+            Math.round(rect.width * thumbnail.width),
+            Math.round(rect.height * thumbnail.height),
+            VISUAL_ANCHOR_FEATURE_COLUMNS,
+            VISUAL_ANCHOR_FEATURE_ROWS
+        );
+        return normalizeVisualAnchor({
+            rect,
+            featureColumns: VISUAL_ANCHOR_FEATURE_COLUMNS,
+            featureRows: VISUAL_ANCHOR_FEATURE_ROWS,
+            feature
+        });
+    }
+
+    async function findVisualAnchorAcrossPages(pages, template) {
+        const visualAnchor = template?.visualAnchor;
+        if (!visualAnchor) return null;
+        const matches = [];
+        for (let index = 0; index < pages.length; index += 1) {
+            const canvasBox = pages[index];
+            const canvas = canvasBox.querySelector(SELECTORS.signatureCanvas);
+            const aspectRatio = getCanvasBoxAspectRatio(canvasBox);
+            if (!canvas || (template.pageAspectRatio && aspectRatio && Math.abs(aspectRatio - template.pageAspectRatio) / template.pageAspectRatio > 0.04)) continue;
+            const thumbnail = readCanvasThumbnail(canvas);
+            const pageMatches = findVisualAnchorMatchesOnThumbnail(thumbnail, visualAnchor);
+            pageMatches.forEach(match => matches.push({ ...match, pageNumber: index + 1, canvasBox, canvas, thumbnail }));
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        matches.sort((left, right) => left.score - right.score);
+        const best = matches[0];
+        const decision = getVisualAnchorMatchDecision(best?.score, matches[1]?.score);
+        if (!decision.matched) return { matched: false, reason: decision.reason, best, next: matches[1] };
+        const targetXRatio = best.x / best.thumbnail.width + visualAnchor.rect.targetOffsetX;
+        const targetYRatio = best.y / best.thumbnail.height + visualAnchor.rect.targetOffsetY;
+        if (targetXRatio < 0 || targetXRatio > 1 || targetYRatio < 0 || targetYRatio > 1) return { matched: false, reason: 'out-of-page', best, next: matches[1] };
+        return { matched: true, ...best, targetXRatio, targetYRatio, next: matches[1] };
+    }
+
     function formatTemplatePageLabel(template) {
         if (!template) return '未选择模板';
         return template.anchor === 'from-end'
@@ -373,6 +572,20 @@
             detected.style.borderRadius = '6px';
             detected.style.backgroundColor = '#f5f7fa';
             detected.style.color = '#606266';
+        }
+
+        const visualAnchorHint = document.createElement('div');
+        if (options.learning) {
+            visualAnchorHint.innerText = normalized.visualAnchor
+                ? '已学习附近的表格画布特征。后续将优先自动寻找相同区域。'
+                : '未能读取页面画布特征，将仅按页码规则落章。';
+            visualAnchorHint.style.marginBottom = '8px';
+            visualAnchorHint.style.padding = '7px 8px';
+            visualAnchorHint.style.borderRadius = '6px';
+            visualAnchorHint.style.backgroundColor = normalized.visualAnchor ? '#f0f9eb' : '#fdf6ec';
+            visualAnchorHint.style.color = normalized.visualAnchor ? '#529b2e' : '#a66a14';
+            visualAnchorHint.style.fontSize = '12px';
+            visualAnchorHint.style.lineHeight = '1.45';
         }
 
         const nameInput = document.createElement('input');
@@ -505,6 +718,7 @@
 
         review.appendChild(title);
         if (options.learning && options.pageNumber && options.totalPages) review.appendChild(detected);
+        if (options.learning) review.appendChild(visualAnchorHint);
         review.appendChild(nameInput);
         review.appendChild(pageRow);
         review.appendChild(help);
@@ -559,14 +773,19 @@
         const existingTemplate = positionTemplateLearningState.editingTemplateId
             ? getSignPositionTemplates().find(item => item.id === positionTemplateLearningState.editingTemplateId)
             : null;
+        const xRatio = (overlayRect.left + overlayRect.width / 2 - boxRect.left) / boxRect.width;
+        const yRatio = (overlayRect.top + overlayRect.height / 2 - boxRect.top) / boxRect.height;
+        const canvas = canvasBox.querySelector(SELECTORS.signatureCanvas);
+        const visualAnchor = createVisualAnchorFromCanvas(canvas, xRatio, yRatio);
         const template = normalizePositionTemplate({
             id: existingTemplate?.id || `template-${Date.now()}`,
             name: positionTemplateLearningState.name,
             anchor,
             offset,
-            xRatio: (overlayRect.left + overlayRect.width / 2 - boxRect.left) / boxRect.width,
-            yRatio: (overlayRect.top + overlayRect.height / 2 - boxRect.top) / boxRect.height,
+            xRatio,
+            yRatio,
             pageAspectRatio: boxRect.width / boxRect.height,
+            visualAnchor,
             createdAt: existingTemplate?.createdAt || Date.now()
         });
         if (!template) {
@@ -1024,7 +1243,7 @@
         const updateSelectedTemplateDetails = () => {
             const selected = getActiveSignPositionTemplate();
             templateSummary.innerText = selected
-                ? `${selected.name} · ${formatTemplatePageLabel(selected)}`
+                ? `${selected.name} · ${formatTemplatePageLabel(selected)} · ${selected.visualAnchor ? '表格锚点已学习' : '仅按页码'}`
                 : '选择模板后会在这里显示目标页规则';
             [editTemplateButton, relearnTemplateButton, deleteTemplateButton].filter(Boolean).forEach(button => {
                 const disabled = !selected || isAutoSignRunningState();
@@ -1166,7 +1385,7 @@
         };
 
         const templateHelp = document.createElement('div');
-        templateHelp.innerText = '在签名页开始学习后，手动放置签名并调整，再点工具栏“保存位置”。位置模板仅记录落点，签名大小沿用平台默认。';
+        templateHelp.innerText = '在签名页开始学习后，手动放置签名并调整，再点工具栏“保存位置”。脚本会记录附近表格画布特征；匹配不可靠时会停止，不会猜测位置。签名大小沿用平台默认。';
         templateHelp.style.marginTop = '8px';
         templateHelp.style.fontSize = '12px';
         templateHelp.style.color = '#606266';
@@ -2783,15 +3002,39 @@
         }
 
         const pages = getSignaturePageBoxes();
-        const pageNumber = resolveTemplatePageNumber(pages.length, template.anchor, template.offset);
-        if (!pageNumber) {
+        let pageNumber = resolveTemplatePageNumber(pages.length, template.anchor, template.offset);
+        let canvasBox = pageNumber ? pages[pageNumber - 1] : null;
+        let canvas = canvasBox?.querySelector(SELECTORS.signatureCanvas);
+        let xRatio = template.xRatio;
+        let yRatio = template.yRatio;
+        let targetSource = 'page-rule';
+        let visualScore = null;
+
+        if (template.visualAnchor) {
+            setStatus(`正在匹配模板“${template.name}”的表格位置...`);
+            const visualMatch = await findVisualAnchorAcrossPages(pages, template);
+            if (!visualMatch?.matched) {
+                const reason = visualMatch?.reason === 'ambiguous'
+                    ? '找到多个相近的表格位置'
+                    : '没有找到足够相似的表格位置';
+                notifyAttention(`位置模板“${template.name}”${reason}，已停止自动签章。请确认文件版式后重新学习模板。`);
+                stopProcess(true);
+                return null;
+            }
+            pageNumber = visualMatch.pageNumber;
+            canvasBox = visualMatch.canvasBox;
+            canvas = visualMatch.canvas;
+            xRatio = visualMatch.targetXRatio;
+            yRatio = visualMatch.targetYRatio;
+            targetSource = 'visual-anchor';
+            visualScore = visualMatch.score;
+            setStatus(`已通过表格锚点定位第 ${pageNumber} / ${pages.length} 页`);
+        } else if (!pageNumber) {
             notifyAttention(`位置模板“${template.name}”的目标页不存在，请重新学习或改用固定位置。`);
             stopProcess(true);
             return null;
         }
 
-        const canvasBox = pages[pageNumber - 1];
-        const canvas = canvasBox?.querySelector(SELECTORS.signatureCanvas);
         if (!canvas) {
             notifyAttention(`位置模板“${template.name}”对应页面的画布未加载，请刷新后重试。`);
             stopProcess(true);
@@ -2818,8 +3061,8 @@
         }
 
         const position = {
-            x: rect.left + rect.width * template.xRatio,
-            y: rect.top + rect.height * template.yRatio
+            x: rect.left + rect.width * xRatio,
+            y: rect.top + rect.height * yRatio
         };
         addAutoSignEvent('template_sign_target', {
             templateName: template.name,
@@ -2827,8 +3070,10 @@
             offset: template.offset,
             pageNumber,
             totalPages: pages.length,
-            xRatio: template.xRatio,
-            yRatio: template.yRatio
+            xRatio,
+            yRatio,
+            targetSource,
+            visualScore
         }, 'info');
         return { canvas, position, template, pageNumber, totalPages: pages.length };
     }
